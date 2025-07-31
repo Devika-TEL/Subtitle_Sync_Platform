@@ -74,6 +74,11 @@ function App() {
     if (!correctionVideo || !correctionSub) {
       setError("Please select both a video file and a subtitle file.");
       setAnnounce("File selection error.");
+      // Focus first missing input
+      setTimeout(() => {
+        if (!correctionVideo) document.getElementById("video-file-correction")?.focus();
+        else if (!correctionSub) document.getElementById("subtitle-file-correction")?.focus();
+      }, 140);
       return;
     }
     setUploading(true);
@@ -120,6 +125,11 @@ function App() {
     if (!generationVideo || !generationLang) {
       setError("Please select a video and output language.");
       setAnnounce("File selection error.");
+      // Focus first missing input
+      setTimeout(() => {
+        if (!generationVideo) document.getElementById("video-file-generation")?.focus();
+        else if (!generationLang) document.getElementById("language-select")?.focus();
+      }, 140);
       return;
     }
     setUploading(true);
@@ -235,8 +245,9 @@ function App() {
     }
   }, [announce]);
 
-  // Render upload/progress/result panel for workflows, with a11y enhancements and helpful status notes
+  // Render upload/progress/result panel for workflows, with a11y enhancements, helpful status notes, and validation feedback
   function renderStatusPanel() {
+    // Error with focus and bold style for a11y (role=alert)
     if (error)
       return (
         <div
@@ -250,12 +261,16 @@ function App() {
             border: "1.5px solid #ED4C8B",
             padding: "10px 16px",
             borderRadius: 9,
-            fontWeight: 500,
+            fontWeight: 600,
+            outline: "2.5px solid #ED4C8B",
+            boxShadow: "0 3px 10px 0 #ed4c8b33",
           }}
         >
-          <span aria-hidden="true">❗</span> Error: {error}
+          <span aria-hidden="true">❗</span> <b>Error:</b> {error}
         </div>
       );
+
+    // Uploading with spinner and a11y
     if (uploading)
       return (
         <div
@@ -267,13 +282,19 @@ function App() {
             display: "flex",
             alignItems: "center",
             gap: 7,
+            fontWeight: 500,
+            background: "#f4f9fd",
+            borderRadius: 8,
+            padding: "7px 12px",
           }}
         >
           <span className="sr-only">Uploading in progress</span>
           <BusySpinner color={brandPalette.primaryBlue} size={16} />
-          Uploading... Please wait.
+          <span>Uploading... Please wait.</span>
         </div>
       );
+
+    // Job status with details, progress and adaptive color
     if (jobId && jobStatus) {
       return (
         <div
@@ -284,6 +305,8 @@ function App() {
             borderRadius: 8,
             padding: "18px 13px 9px 13px",
             outline: jobStatus.status === "error" ? "2px solid #ED4C8B" : undefined,
+            boxShadow: "0 2px 12px #a3c2fe18",
+            fontWeight: 500,
           }}
           tabIndex={-1}
           id="status-announcement"
@@ -295,6 +318,9 @@ function App() {
             <span style={{ color: statusColor(jobStatus.status) }}>
               {jobStatus.status?.toUpperCase() || "loading..."}
             </span>
+            {" "}
+            {jobStatus.status === "success" && <span aria-label="success" style={{color:"#3cc878"}}>✔️</span>}
+            {jobStatus.status === "error" && <span aria-label="failure" style={{color:"#ED4C8B"}}>❌</span>}
           </strong>
           <br />
           <span>
@@ -303,7 +329,7 @@ function App() {
                 ? "Complete"
                 : "Processing...")}
           </span>
-          {jobStatus.progress !== undefined &&
+          {typeof jobStatus.progress === "number" &&
             jobStatus.status !== "success" && (
               <>
                 <ProgressBar progress={jobStatus.progress || 10} />
@@ -341,12 +367,12 @@ function App() {
                 fontSize: 15,
                 padding: "9px 11px"
               }}>
-                <span aria-hidden="true">✔️</span> Subtitle output is ready!
+                <span aria-hidden="true">✔️</span> <b>Subtitle output is ready!</b>
                 <br />
                 <span style={{ fontSize: "0.97em" }}>
-                  No direct download link is available yet.
+                  No direct download link is available. <span className="sr-only"> Ask an administrator for access. </span>
                   <br />
-                  Please contact your administrator or check the backend storage for the final subtitle file.
+                  Please contact your administrator or check backend storage for the final subtitle file.
                 </span>
                 <br />
                 <span style={{ color: "#A41E7E" }}>
@@ -358,24 +384,28 @@ function App() {
         </div>
       );
     }
-    // Explanatory info about workflow below forms
+    // Explanatory info about workflow below forms (now includes brand highlight and a11y-friendly tips)
     return (
       <div
         aria-live="polite"
         className="info-message"
         style={{
           marginTop: 16,
-          fontSize: "1.01rem",
+          fontSize: "1.07rem",
           color: "#22223A",
           background: "#fafbfd",
           border: "1px solid #e5e7ee",
           borderRadius: 8,
-          padding: "10px 14px",
+          padding: "11px 16px",
         }}
       >
+        <strong style={{color: brandPalette.primaryBlue}}>Need help?</strong> &nbsp; 
         For best results:&nbsp;
         <span style={{ color: brandPalette.primaryBlue }}>
           Wait for your upload to finish, keep this tab open, and contact support if jobs fail multiple times.
+        </span>
+        <span className="sr-only">
+          Screen reader tip: workflow actions and upload progress are announced in real time.
         </span>
       </div>
     );

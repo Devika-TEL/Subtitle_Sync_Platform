@@ -154,11 +154,14 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 7px;
+  width: 100%;
 }
 
 .input-label {
   font-weight: 500;
   font-size: 1.08rem;
+  cursor: pointer;
+  outline: none;
 }
 .input-select {
   margin-top: 3px;
@@ -173,6 +176,8 @@
 
 .input-select:focus {
   outline: 2px solid var(--accent-purple);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent-purple);
+  border-color: var(--accent-purple);
 }
 
 .custom-file-input {
@@ -190,8 +195,14 @@
   cursor: pointer;
   background: transparent;
   color: var(--primary-blue);
+  transition: background 0.15s, color 0.15s, border-color 0.15s, outline 0.12s;
+  outline: none;
 }
-.file-btn:hover {
+.file-btn:focus {
+  outline: 2px dashed var(--accent-purple);
+  background: #faf6fc;
+}
+.file-btn:hover, .file-btn:active {
   background: var(--accent-yellow);
   color: var(--primary-blue);
   border-color: var(--accent-yellow);
@@ -205,6 +216,15 @@
   border: none;
   margin-left: 3px;
   cursor: pointer;
+  transition: color 0.13s, background 0.13s;
+  outline: none;
+}
+.file-clear-btn:focus {
+  outline: 2px dashed var(--accent-purple);
+  background: #faf6fc;
+}
+.file-clear-btn:hover {
+  color: var(--accent-purple);
 }
 
 .submit-btn {
@@ -267,4 +287,8 @@
   border: 0 !important;
   padding: 0 !important;
   margin: 0 !important;
+}
+.info-message strong {
+  font-weight: bold;
+  color: var(--primary-blue);
 }
