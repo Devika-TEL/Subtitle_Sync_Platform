@@ -19,6 +19,7 @@ function getApiBase() {
  * PUBLIC_INTERFACE
  * App Root for Subtitle Sync Platform Dashboard.
  * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, accessible feedback, and result/error display.
+ * Now features robust, actionable, visually distinct backend/API connectivity error handling for users!
  */
 function App() {
   // Theme toggle (accessible with ARIA & focus-visible)
@@ -50,20 +51,56 @@ function App() {
   const [polling, setPolling] = useState(false);
   const [announce, setAnnounce] = useState(""); // For aria-live
 
-  // Backend health check state
-  const [backendStatus, setBackendStatus] = useState("...");
+  // Backend health check state and error handling
+  const [apiHealthy, setApiHealthy] = useState(true);
+  const [apiErrorMsg, setApiErrorMsg] = useState("");
+  const [apiErrorDetails, setApiErrorDetails] = useState("");
   const apiBase = getApiBase();
 
   useEffect(() => {
     // Health check fetch to backend using environment config, on mount.
     async function checkBackend() {
       try {
-        const resp = await fetch(`${apiBase}/healthz`, { method: "GET" });
-        if (!resp.ok) throw new Error();
-        setBackendStatus("Backend connected!");
-      } catch {
-        setBackendStatus(
-          `❗ Backend unreachable at "${apiBase}". Check REACT_APP_API_BASE and backend service.`
+        // Prefer /api/healthz but fallback to /healthz for old configs
+        let healthOk = false;
+        let resp, triedAlt = false;
+        try {
+          resp = await fetch(`${apiBase}/api/healthz`, { method: "GET" });
+          if (resp.ok) healthOk = true;
+        } catch (e) {
+          triedAlt = true;
+        }
+        if (!healthOk && !triedAlt) {
+          try {
+            resp = await fetch(`${apiBase}/healthz`, { method: "GET" });
+            if (resp.ok) healthOk = true;
+          } catch {}
+        }
+        if (!healthOk) {
+          throw new Error();
+        }
+        setApiHealthy(true);
+        setApiErrorMsg("");
+        setApiErrorDetails("");
+      } catch (err) {
+        setApiHealthy(false);
+        let advice =
+          "The frontend could not connect to the backend/API service. This can result from the backend server being down, unreachable, or due to network/firewall/CORS problems.";
+        let details = err && err.message ? err.message : "No response or CORS/network error";
+
+        setApiErrorMsg(advice);
+        setApiErrorDetails(
+          [
+            `The attempted backend URL was: ${apiBase}`,
+            "Possible actions:",
+            "• Ensure the backend service is running and accessible.",
+            "• If running locally, check that your backend is started and accessible on the above URL.",
+            '• If you see CORS errors, ensure the backend sends proper "Access-Control-Allow-Origin" headers.',
+            "• If using a dev proxy, make sure your DEV server setup is configured correctly.",
+            "• Contact your technical support team if unsure.",
+            "",
+            `Technical details: ${details}`,
+          ].join("\n")
         );
       }
     }
@@ -282,6 +319,63 @@ function App() {
       if (region) region.focus();
     }
   }, [announce]);
+
+  // Component: Backend/API connectivity troubleshooting banner
+  function renderApiErrorBanner() {
+    if (apiHealthy) return null;
+    return (
+      <div
+        style={{
+          background: 'linear-gradient(90deg, #ffdddd, #ffeeee)',
+          border: '2px solid #d32f2f',
+          color: '#780404',
+          padding: '1.1rem 1.6rem 1.05rem 1.6rem',
+          borderRadius: '8px',
+          margin: '1.7rem auto',
+          maxWidth: 830,
+          fontWeight: 'bold',
+          fontFamily: 'inherit, system-ui, Arial',
+          boxShadow: '0 2px 7px #d32f2f3e',
+          zIndex: 25,
+          textShadow: '0 1px 0 #fff5'
+        }}
+        role="alert"
+        aria-live="assertive"
+        tabIndex={0}
+        data-testid="api-connectivity-error"
+      >
+        <div style={{ fontSize: "1.35rem", marginBottom: 6 }}>
+          <span role="img" aria-label="api error" style={{marginRight: 9}}>🚨</span>
+          Unable to Reach Backend API
+        </div>
+        <div style={{ fontSize: "1rem", fontWeight: 500 }}>
+          <div>
+            {apiErrorMsg}
+            <ol style={{ margin: '8px 0 0 1.1em', fontWeight: 400 }}>
+              <li>Ensure the backend server is running and accessible.</li>
+              <li>If running locally, verify the backend process is started and not blocked by a firewall.</li>
+              <li>If using Docker or cloud deployment, check your container or service status.</li>
+              <li>If you see a "CORS" error, the backend must send correct <b>Access-Control-Allow-Origin</b> headers.
+                See <a href="https://enable-cors.org/server.html" target="_blank" rel="noopener noreferrer">CORS documentation</a>.
+              </li>
+              <li>Contact your administrator or technical support if the issue persists.</li>
+            </ol>
+          </div>
+          <div
+            style={{
+              marginTop: 14,
+              fontFamily: 'monospace',
+              fontSize: '0.97em',
+              color: '#a32e2e',
+              whiteSpace: "pre-wrap", wordBreak: "break-all"
+            }}
+          >
+            <b>Technical details:</b> <br />{apiErrorDetails}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Render upload/progress/result panel for workflows, with a11y enhancements, helpful status notes, and validation feedback
   function renderStatusPanel() {
@@ -517,6 +611,7 @@ function App() {
 
   return (
     <div className="App" style={{ background: brandPalette.neutralWhite }}>
+      {renderApiErrorBanner()}
       <header
         className="dashboard-header"
         style={{
@@ -548,15 +643,15 @@ function App() {
           style={{
             marginTop: 7,
             fontSize: "1em",
-            color: backendStatus.startsWith("❗") ? "#ED4C8B" : "#FFC60B",
-            background: backendStatus.startsWith("❗") ? "#ffe3ed" : "#fff9e6",
+            color: apiHealthy ? "#FFC60B" : "#ED4C8B",
+            background: apiHealthy ? "#fff9e6" : "#ffe3ed",
             borderRadius: 8,
             padding: "7px 12px",
             fontWeight: 550,
-            boxShadow: backendStatus.startsWith("❗") ? "0 3px 6px #ed4c8b22" : "0 1.5px 3px #ffc60b22",
+            boxShadow: apiHealthy ? "0 1.5px 3px #ffc60b22" : "0 3px 6px #ed4c8b22",
           }}
         >
-          {backendStatus}
+          {apiHealthy ? "Backend connected!" : "⚠️ Backend unreachable. See troubleshooting below."}
         </div>
       </header>
 
