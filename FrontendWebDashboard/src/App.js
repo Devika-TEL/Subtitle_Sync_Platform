@@ -1,25 +1,22 @@
 import React, { useState, useEffect, useRef } from "react";
 import "./App.css";
 
-/**
- * Returns the backend API base URL from environment variable.
- * Falls back to a sensible default if not provided.
- */
 // PUBLIC_INTERFACE
+/**
+ * Returns the backend API base URL from environment variable or a default.
+ */
 function getApiBase() {
   let base = process.env.REACT_APP_API_BASE;
   if (!base || typeof base !== 'string' || !base.trim()) {
-    // Fallback: assumes backend is on port 3001 (default for this app)
     base = "http://localhost:3001";
   }
-  return base.replace(/\/+$/, ""); // Remove trailing slashes
+  return base.replace(/\/+$/, "");
 }
 
+// PUBLIC_INTERFACE
 /**
- * PUBLIC_INTERFACE
- * App Root for Subtitle Sync Platform Dashboard.
- * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, accessible feedback, and result/error display.
- * Now features robust, actionable, visually distinct backend/API connectivity error handling for users!
+ * Subtitle Sync Platform Dashboard App Root.
+ * Handles subtitle correction/generation workflows.
  */
 function App() {
   // Theme toggle (accessible with ARIA & focus-visible)
@@ -956,5 +953,4 @@ function FileUploader({ label, accept, onChange, value, required, brandColor, id
   );
 }
 
-// Offscreen (screen-reader only) style class to use for live regions (add this also in App.css)
 export default App;
