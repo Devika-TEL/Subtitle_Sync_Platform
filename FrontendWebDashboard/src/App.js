@@ -79,7 +79,8 @@ function App() {
       formData.append("video_file", correctionVideo);
       formData.append("subtitle_file", correctionSub);
 
-      const resp = await fetch("/api/correction", {
+      const API_BASE = process.env.REACT_APP_API_BASE || "";
+      const resp = await fetch(`${API_BASE}/api/correction`, {
         method: "POST",
         body: formData,
       });
@@ -119,7 +120,8 @@ function App() {
       const formData = new FormData();
       formData.append("video_file", generationVideo);
       formData.append("language", generationLang);
-      const resp = await fetch("/api/generation", {
+      const API_BASE = process.env.REACT_APP_API_BASE || "";
+      const resp = await fetch(`${API_BASE}/api/generation`, {
         method: "POST",
         body: formData,
       });
@@ -148,11 +150,12 @@ function App() {
   // Poll job status when jobId & polling
   useEffect(() => {
     let pollInt = null;
+    const API_BASE = process.env.REACT_APP_API_BASE || "";
     if (jobId && polling) {
       // Start polling
       pollInt = setInterval(async () => {
         try {
-          const resp = await fetch(`/api/jobs/${jobId}`);
+          const resp = await fetch(`${API_BASE}/api/jobs/${jobId}`);
           if (!resp.ok) throw new Error("Could not check job status");
           const job = await resp.json();
           setJobStatus(job);
@@ -172,14 +175,13 @@ function App() {
               // Try fetch subtitle record to get path/filename
               try {
                 const subResp = await fetch(
-                  `/api/subtitles/${job.output_subtitle_id}`
+                  `${API_BASE}/api/subtitles/${job.output_subtitle_id}`
                 );
                 if (subResp.ok) {
                   const sub = await subResp.json();
-                  // For demo, expect backend to have a public static path (could be replaced with better endpoint)
-                  setDownloadLink(
-                    `/static/${getFileNameFromPath(sub.file_path)}`
-                  );
+                  // For now, we do not have a direct static subtitle file serving path.
+                  // Instead, we display a note and the subtitle's stored location.
+                  setDownloadLink(null);
                 }
               } catch {}
             }
@@ -265,7 +267,7 @@ function App() {
             jobStatus.status !== "success" && (
               <ProgressBar progress={jobStatus.progress || 10} />
             )}
-          {downloadLink && (
+          {downloadLink ? (
             <div style={{ marginTop: 14 }}>
               <a
                 href={downloadLink}
@@ -282,6 +284,23 @@ function App() {
                 Download Corrected/Generated Subtitle
               </a>
             </div>
+          ) : (
+            jobStatus &&
+            jobStatus.status === "success" &&
+            jobStatus.output_subtitle_id && (
+              <div style={{
+                color: brandPalette.primaryBlue,
+                marginTop: 12,
+                background: "#f0f1fc",
+                borderRadius: 7,
+                fontSize: 15,
+                padding: "9px 11px"
+              }}>
+                Subtitle output is ready! <br />
+                No direct download link is available yet.<br />
+                Please contact your administrator, or check the backend storage for the final subtitle file.
+              </div>
+            )
           )}
         </div>
       );
@@ -392,7 +411,15 @@ function App() {
           {workflow === "correction" && (
             <form className="workflow-form" onSubmit={handleCorrectionSubmit}>
               <h2 style={{ color: brandPalette.primaryBlue }}>Subtitle Correction</h2>
-              <p>Upload your video and existing subtitle file. The system will correct and return a compliant subtitle file.</p>
+              <p>Upload your video and an existing subtitle file.<br />
+                <span style={{fontSize:'0.93em',color:brandPalette.accentPurple}}>
+                  Supported subtitle formats: SRT, VTT, ASS, SUB, TXT, DFXP, SBV.<br />
+                  Recommended video format: MP4, MOV, AVI, MKV.<br />
+                  Final output will match the uploaded subtitle's format.
+                </span>
+                <br />
+                The system will correct and return a compliant subtitle file.
+              </p>
               <FileUploader
                 label="Video File"
                 accept="video/*"
@@ -428,7 +455,17 @@ function App() {
           {workflow === "generation" && (
             <form className="workflow-form" onSubmit={handleGenerationSubmit}>
               <h2 style={{ color: brandPalette.accentPurple }}>Subtitle Generation</h2>
-              <p>Upload a video to generate subtitles. Select output language for translation.</p>
+              <p>
+                Upload a video file to generate subtitles.
+                <br />
+                <span style={{fontSize:'0.93em',color:brandPalette.accentPurple}}>
+                  Recommended video format: MP4, MOV, AVI, MKV.<br />
+                  Subtitles will be generated using AI and translated if you choose a language different from the video language.<br />
+                  Output will be in SRT format unless the backend determines otherwise.
+                </span>
+                <br />
+                Select output language for translation.
+              </p>
               <FileUploader
                 label="Video File"
                 accept="video/*"
