@@ -76,10 +76,11 @@ app.add_middleware(
         "http://localhost:3000", 
         "http://localhost:3001",  # Backend port for potential cross-origin requests
         "http://localhost:3002",  # Local port 3002
-        # Primary deployment URLs
+        # Primary deployment URLs - updated for proxy setup
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
+        "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai",
         # Legacy URLs for backward compatibility
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
@@ -1267,4 +1268,4 @@ async def process_translation_job(job_id: int, target_language: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

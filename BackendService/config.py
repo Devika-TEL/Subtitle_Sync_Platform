@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     
     # Server settings
     host: str = "0.0.0.0"
-    port: int = 3001
+    port: int = 8000
     reload: bool = False
     
     @validator('port', pre=True)
@@ -71,6 +71,7 @@ class Settings(BaseSettings):
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
+        "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai",
         # Legacy URLs for backward compatibility
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",

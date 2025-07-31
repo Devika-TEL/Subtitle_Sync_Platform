@@ -4,7 +4,7 @@
 **Problem**: Users encountered a persistent "Failed to process correction. Please try again." error when clicking the 'Fix Subtitles' button, despite backend functionality working correctly.
 
 **Root Cause**: The issue was identified as a combination of:
-1. Incorrect API base URL configuration (pointing to port 3001 instead of 8000)
+1. Incorrect API base URL configuration (pointing to port 3001 instead of proxy/8000)
 2. Inadequate error handling and response processing in the frontend
 3. Insufficient error reporting that masked the underlying issues
 
@@ -17,7 +17,7 @@
 - ✅ File upload and processing logic operational
 
 ### 2. Frontend Analysis
-- ❌ API base URL misconfigured (`http://localhost:3001` vs `http://localhost:8000`)
+- ❌ API base URL misconfigured (`http://localhost:3001` vs `https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/`)
 - ❌ Generic error handling that didn't surface specific issues
 - ❌ Inadequate response type handling (Blob vs text responses)
 - ❌ Limited debugging information for troubleshooting
@@ -27,8 +27,8 @@
 ### 1. API Configuration Fix
 **File**: `FrontendWebDashboard/src/services/api.js`
 ```javascript
-// Changed from port 3001 to 8000
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+// Changed from port 3001 to proxy/8000
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/';
 
 // Added debug logging
 if (process.env.NODE_ENV === 'development') {
@@ -80,7 +80,7 @@ if (process.env.NODE_ENV === 'development') {
 
 ### Frontend Testing
 ```bash
-✅ API base URL: Now correctly pointing to port 8000
+✅ API base URL: Now correctly pointing to proxy/8000
 ✅ Error logging: Comprehensive error details captured
 ✅ Response handling: Both Blob and text responses processed
 ✅ File download: Corrected files properly downloadable

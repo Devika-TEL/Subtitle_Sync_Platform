@@ -64,6 +64,10 @@ class CORSHeadersMiddleware(BaseHTTPMiddleware):
             "http://localhost:3000",
             "http://localhost:3001", 
             "http://localhost:3002",
+            "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
+            "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
+            "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
+            "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai",
             "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
             "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"
         ]

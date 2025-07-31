@@ -2,7 +2,7 @@
 
 ## ✅ Completed Integration Tasks
 
-### Frontend (React) - Port 3001
+### Frontend (React) - Port 3000
 - ✅ Updated package.json with axios and react-router-dom dependencies
 - ✅ Created comprehensive React application with all required features:
   - Video and subtitle file upload interfaces
@@ -16,11 +16,11 @@
 - ✅ Environment configuration for backend communication
 - ✅ Clean, maintainable code structure with proper documentation
 
-### Backend (FastAPI) - Port 8000
+### Backend (FastAPI) - Port 8000 (via proxy)
 - ✅ FastAPI backend service is running and accessible
 - ✅ CORS middleware configured for frontend communication
 - ✅ File upload endpoint (`/process`) implemented
-- ✅ Swagger/OpenAPI documentation available at http://localhost:8000/docs
+- ✅ Swagger/OpenAPI documentation available at https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/docs
 - ✅ Dependencies installed and configured
 - ✅ Requirements.txt file created for deployment
 
@@ -66,7 +66,7 @@
 
 ```
 Frontend (React)          Backend (FastAPI)         Database (SQLite)
-Port: 3001            <--> Port: 8000          <--> File-based storage
+Port: 3000            <--> Port: 8000 (proxy)  <--> File-based storage
                       
 Components:               Endpoints:                Models:
 - Upload Forms           - POST /process           - Users
@@ -91,9 +91,9 @@ npm start
 ```
 
 ### 3. Access the Applications
-- **Frontend Dashboard**: http://localhost:3001
-- **Backend API Docs**: http://localhost:8000/docs
-- **Backend API**: http://localhost:8000
+- **Frontend Dashboard**: http://localhost:3000
+- **Backend API Docs**: https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/docs
+- **Backend API**: https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/
 
 ## 📋 User Workflows
 
