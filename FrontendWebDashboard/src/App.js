@@ -1,72 +1,85 @@
-import React from 'react';
-import './App.css';
+import React, { useRef } from "react";
+import "./App.css";
 
 // PUBLIC_INTERFACE
 function App() {
   /**
-   * This is the main dashboard component restored to the previous UI/UX design.
-   * The dashboard displays upload sections, subtitle management, and download cards.
-   * Layout relies on CSS cards and a main grid.
+   * Root application component for the Subtitle Sync Dashboard.
+   * Provides UI for uploading videos/subtitles, monitoring progress, and accessing downloads.
    */
+  const videoInputRef = useRef(null);
+  const subtitleInputRef = useRef(null);
+
+  // Handler for upload button click - triggers file input
+  const handleSelectVideo = () => videoInputRef.current.click();
+  const handleSelectSubtitle = () => subtitleInputRef.current.click();
+
+  // Handler for when a file is selected
+  const handleVideoChange = (event) => {
+    // TODO: implement logic to handle video file upload
+    // e.g.: set video in state, send to backend, show progress indicator, etc.
+  };
+
+  const handleSubtitleChange = (event) => {
+    // TODO: implement logic to handle subtitle file upload
+    // e.g.: set subtitle in state, send to backend, show progress indicator, etc.
+  };
+
   return (
-    <div className="dashboard-background">
+    <div className="dashboard-root">
       <header className="dashboard-header">
         <h1>Subtitle Sync Platform</h1>
-        <p className="dashboard-tagline">AI-powered Subtitle-Audio Synchronization and Management for Any Format or Language</p>
+        <p>Streamline subtitle-audio synchronization and subtitle generation for your videos</p>
       </header>
-
-      <div className="dashboard-grid">
-        {/* Video & Subtitle Upload Card */}
-        <div className="dashboard-card">
-          <h2>Upload Video & Subtitles</h2>
-          <form className="dashboard-form">
-            <label>
-              Video File:
-              <input type="file" accept="video/*" />
-            </label>
-            <label>
-              Subtitle File:
-              <input type="file" accept=".srt,.vtt,.ass,.sub,.txt" />
-            </label>
-            <button className="dashboard-btn">Upload</button>
-          </form>
-        </div>
-
-        {/* Subtitle Generation Card */}
-        <div className="dashboard-card highlight-card">
-          <h2>Subtitle Generation & Translation</h2>
-          <p>
-            Generate new subtitles using AI or translate existing subtitles into multiple languages.
-          </p>
-          <button className="dashboard-btn">Generate / Translate</button>
-        </div>
-
-        {/* Quality Check Card */}
-        <div className="dashboard-card">
-          <h2>Quality Check & Compliance</h2>
-          <ul className="feature-list">
-            <li>Latency & sync verification</li>
-            <li>OTT compliance checks</li>
-            <li>Frame rate, row, and character count validation</li>
-          </ul>
-          <button className="dashboard-btn">Run Quality Check</button>
-        </div>
-
-        {/* Subtitle Management & Download Card */}
-        <div className="dashboard-card">
-          <h2>Subtitle Management</h2>
-          <ul className="feature-list">
-            <li>Preview & edit subtitles in browser</li>
-            <li>Download original/corrected files</li>
-            <li>Request additional formats</li>
-          </ul>
-          <button className="dashboard-btn dashboard-download-btn">Download Subtitles</button>
-        </div>
-      </div>
-
+      <main className="dashboard-content">
+        <section className="upload-section">
+          <h2>Upload Files</h2>
+          <div className="uploader-controls">
+            <button className="upload-btn" onClick={handleSelectVideo}>
+              Upload Video
+            </button>
+            <input
+              type="file"
+              accept="video/*"
+              ref={videoInputRef}
+              style={{ display: "none" }}
+              onChange={handleVideoChange}
+              aria-label="Upload Video"
+            />
+            <button className="upload-btn" onClick={handleSelectSubtitle}>
+              Upload Subtitle
+            </button>
+            <input
+              type="file"
+              accept=".srt,.vtt,.ass,.sub"
+              ref={subtitleInputRef}
+              style={{ display: "none" }}
+              onChange={handleSubtitleChange}
+              aria-label="Upload Subtitle File"
+            />
+          </div>
+          <div className="hint-text">
+            <small>Supported formats: SRT, VTT, ASS, SUB. Multiple languages and formats supported.</small>
+          </div>
+        </section>
+        <section className="progress-section">
+          <h2>Processing Progress</h2>
+          {/* TODO: Insert dynamic progress tracker (spinner, progress bar, etc.) */}
+          <div className="progress-placeholder">
+            No jobs currently processing.
+          </div>
+        </section>
+        <section className="download-section">
+          <h2>Download Processed Subtitles</h2>
+          {/* TODO: Dynamically list processed subtitles with download buttons */}
+          <div className="download-placeholder">
+            Processed subtitle files will appear here for download.
+          </div>
+        </section>
+      </main>
       <footer className="dashboard-footer">
         <span>
-          &copy; {new Date().getFullYear()} Subtitle Sync Platform. Powered by LLMs.
+          &copy; 2024 Subtitle Sync Platform. Powered by LLMs. All rights reserved.
         </span>
       </footer>
     </div>

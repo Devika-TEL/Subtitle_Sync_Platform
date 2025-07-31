@@ -1,134 +1,136 @@
-.dashboard-background {
+.dashboard-root {
+  font-family: "Segoe UI", Arial, sans-serif;
   min-height: 100vh;
-  background: linear-gradient(120deg, #102040 0%, #425392 100%);
+  background: #f2f4f8;
+  color: #363636;
   display: flex;
   flex-direction: column;
 }
 
 .dashboard-header {
-  background: #191f30;
-  color: #f6f6f6;
+  background: #223056;
+  color: #fff;
   padding: 2rem 0 1rem 0;
   text-align: center;
-  margin-bottom: 0.5rem;
-  box-shadow: 0 1px 8px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 8px rgba(60, 60, 120, 0.03);
 }
 
 .dashboard-header h1 {
   margin: 0;
-  font-size: 2.5rem;
-  font-weight: bold;
-  letter-spacing: 0.05em;
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
-
-.dashboard-tagline {
-  margin-top: 0.3rem;
-  color: #accaff;
+.dashboard-header p {
+  margin-top: 0.7rem;
   font-size: 1.1rem;
   font-weight: 400;
+  color: #dae5fd;
 }
 
-.dashboard-grid {
+.dashboard-content {
+  flex: 1;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
   gap: 2rem;
-  padding: 2rem;
+  justify-content: center;
+  align-items: flex-start;
+  margin: 2.5rem auto;
+  max-width: 1100px;
+  width: 100%;
+  flex-wrap: wrap;
 }
 
-.dashboard-card {
+.upload-section,
+.progress-section,
+.download-section {
   background: #fff;
-  box-shadow: 0 2px 16px rgba(34, 52, 90, 0.13);
-  border-radius: 14px;
-  min-width: 320px;
-  max-width: 340px;
-  margin: 0.5rem;
-  padding: 2rem 1.5rem 1.5rem 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(160, 180, 205, 0.08);
+  min-width: 300px;
+  flex-basis: 30%;
+  padding: 2rem 1.5rem 1.7rem 1.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  transition: transform 0.1s, box-shadow 0.1s;
+  margin-bottom: 2rem;
 }
 
-.dashboard-card:hover, .dashboard-card:focus-within {
-  box-shadow: 0 6px 36px 0 #191f30bb;
-  transform: translateY(-3px) scale(1.015);
+.upload-section h2,
+.progress-section h2,
+.download-section h2 {
+  margin: 0 0 1.5rem 0;
+  font-size: 1.29rem;
+  font-weight: 600;
+  color: #304474;
 }
 
-.highlight-card {
-  border-left: 4px solid #4666ff;
-}
-
-.dashboard-form {
+.uploader-controls {
   display: flex;
-  flex-direction: column;
-  gap: 1.3rem;
-  width: 100%;
+  gap: 1.25rem;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
 }
 
-.dashboard-form input[type="file"] {
-  margin-top: 0.5rem;
-}
-
-.dashboard-btn {
-  margin-top: 1.2rem;
-  padding: 0.6rem 1.2rem;
+.upload-btn {
+  background: #4169e1;
+  color: #fff;
   border: none;
-  background-color: #4666ff;
-  color: #fff;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 1rem;
-  font-weight: bold;
-  box-shadow: 0 2px 8px 0 #4666ff44;
+  font-weight: 500;
+  padding: 0.75rem 1.3rem;
   cursor: pointer;
-  transition: background 0.17s;
+  transition: background 0.17s, transform 0.15s;
+  outline: none;
+}
+.upload-btn:focus, .upload-btn:hover {
+  background: #2540a8;
+  transform: translateY(-2px) scale(1.04);
 }
 
-.dashboard-btn:hover,
-.dashboard-btn:focus {
-  background-color: #2942a5;
-  color: #fff;
+.hint-text {
+  margin-top: 0.5rem;
+  text-align: center;
+  color: #888;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
 }
 
-.dashboard-download-btn {
-  background: linear-gradient(90deg, #72d8c8 0%, #4666ff 100%);
-  color: #172444;
-  font-weight: bold;
-  box-shadow: 0 2px 12px 0 #35d6bb44;
-}
-
-.dashboard-download-btn:hover,
-.dashboard-download-btn:focus {
-  background: linear-gradient(90deg, #4666ff 0%, #72d8c8 100%);
-  color: #091020;
-}
-
-.feature-list {
-  color: #425392;
-  list-style: square inside;
-  padding-left: 0;
-  margin: 0.7rem 0 0 0;
+.progress-placeholder,
+.download-placeholder {
+  color: #ccc;
+  padding: 2.5rem 0;
+  font-size: 1.08rem;
+  text-align: center;
 }
 
 .dashboard-footer {
-  background: #202840;
+  background: #223056;
+  color: #e0e8fa;
   text-align: center;
-  color: #c7e4ff;
-  padding: 1rem;
+  padding: 1.2rem 0 1rem 0;
+  letter-spacing: 0.03em;
   font-size: 1rem;
   margin-top: auto;
-  letter-spacing: 0.01em;
-  box-shadow: 0 -2px 8px 0 #0a1a3022;
+  border-top: 3px solid #2f4676;
 }
 
-@media (max-width: 900px) {
-  .dashboard-grid {
+
+/* Responsive adjustments */
+@media (max-width: 980px) {
+  .dashboard-content {
     flex-direction: column;
-    align-items: center;
-    padding: 1rem;
+    align-items: stretch;
+    gap: 1.5rem;
+    margin: 1rem 1.5rem;
+    max-width: 98%;
   }
-  .dashboard-card {
-    min-width: 90vw;
-    max-width: 99vw;
+  .upload-section,
+  .progress-section,
+  .download-section {
+    margin-bottom: 1.2rem;
+    min-width: unset;
+    width: 100%;
+    max-width: unset;
   }
 }
