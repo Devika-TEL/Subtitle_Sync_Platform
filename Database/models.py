@@ -1,4 +1,5 @@
 import sqlite3
+import os
 
 # PUBLIC_INTERFACE
 def create_tables():
@@ -11,7 +12,9 @@ def create_tables():
         subtitles - Subtitle files, linked to videos
         jobs - Processing jobs and statuses
     """
-    conn = sqlite3.connect('subtitle_sync_platform.db')
+    # Get the database path relative to this file's location
+    db_path = os.path.join(os.path.dirname(__file__), 'subtitle_sync_platform.db')
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
     # Users table: authentication and role management

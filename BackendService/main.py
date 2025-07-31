@@ -210,20 +210,40 @@ def get_db_connection():
 def init_database():
     """Initialize database tables"""
     try:
+        # First, ensure the database directory exists
+        db_dir = os.path.join(os.path.dirname(__file__), "..", "Database")
+        os.makedirs(db_dir, exist_ok=True)
+        
+        # Check if tables already exist
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='subtitles'")
+        subtitles_table_exists = cursor.fetchone() is not None
+        conn.close()
+        
+        if subtitles_table_exists:
+            logger.info("Database tables already exist - skipping initialization")
+            return
+        
+        logger.info("Database tables missing - initializing...")
+        
         # Try to import from Database module
         import sys
         database_path = os.path.join(os.path.dirname(__file__), "..", "Database")
         if database_path not in sys.path:
             sys.path.append(database_path)
         
-        from models import create_tables
-        create_tables()
-        logger.info("Database initialized successfully using models.py")
-    except Exception as e:
-        logger.warning(f"Failed to initialize database using models: {e}")
-        logger.info("Attempting fallback database initialization...")
-        
         try:
+            from models import create_tables
+            # Modify create_tables to use the correct database path
+            original_cwd = os.getcwd()
+            os.chdir(database_path)
+            create_tables()
+            os.chdir(original_cwd)
+            logger.info("Database initialized successfully using models.py")
+        except Exception as models_error:
+            logger.warning(f"Failed to initialize using models.py: {models_error}")
+            
             # Fallback: create tables directly using schema
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -253,6 +273,7 @@ def init_database():
                         filename TEXT NOT NULL,
                         language TEXT,
                         upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        original BOOLEAN DEFAULT 1,
                         FOREIGN KEY (user_id) REFERENCES users (id)
                     );
                     
@@ -263,9 +284,11 @@ def init_database():
                         filename TEXT NOT NULL,
                         language TEXT,
                         upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        processed BOOLEAN DEFAULT FALSE,
+                        processed BOOLEAN DEFAULT 0,
+                        job_id INTEGER,
                         FOREIGN KEY (video_id) REFERENCES videos (id),
-                        FOREIGN KEY (user_id) REFERENCES users (id)
+                        FOREIGN KEY (user_id) REFERENCES users (id),
+                        FOREIGN KEY (job_id) REFERENCES jobs (id)
                     );
                     
                     CREATE TABLE IF NOT EXISTS jobs (
@@ -289,9 +312,10 @@ def init_database():
             conn.close()
             logger.info("Database initialization completed")
             
-        except Exception as fallback_error:
-            logger.error(f"Database initialization completely failed: {fallback_error}")
-            # Continue anyway - the app can still run with limited functionality
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        # Don't raise the exception - let the app continue with existing database
+        logger.warning("Continuing with existing database state...")
 
 # Authentication helpers
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
