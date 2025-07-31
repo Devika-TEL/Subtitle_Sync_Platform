@@ -409,8 +409,9 @@ async def upload_subtitle(
     current_user: dict = Depends(get_current_user)
 ):
     """Upload subtitle file and store metadata"""
-    if not file.filename.endswith(('.srt', '.vtt', '.ass', '.scc')):
-        raise HTTPException(status_code=400, detail="Unsupported subtitle format")
+    allowed_extensions = ('.srt', '.vtt', '.ass', '.ssa', '.scc', '.sub', '.smi', '.sami')
+    if not file.filename.lower().endswith(allowed_extensions):
+        raise HTTPException(status_code=400, detail=f"Unsupported subtitle format. Supported formats: {', '.join(allowed_extensions)}")
     
     # Save uploaded file
     file_path = os.path.join(UPLOAD_DIR, file.filename)

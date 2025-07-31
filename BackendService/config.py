@@ -4,7 +4,8 @@ Configuration management for the Subtitle Sync Platform backend
 
 import os
 from typing import Optional, Dict, Any
-from pydantic import BaseSettings, validator
+from pydantic_settings import BaseSettings
+from pydantic import validator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     processed_dir: str = "processed"
     max_file_size_mb: int = 500
     allowed_video_extensions: list = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"]
-    allowed_subtitle_extensions: list = [".srt", ".vtt", ".ass", ".ssa", ".scc"]
+    allowed_subtitle_extensions: list = [".srt", ".vtt", ".ass", ".ssa", ".scc", ".sub", ".smi", ".sami"]
     
     # Processing settings
     max_concurrent_jobs: int = 4
