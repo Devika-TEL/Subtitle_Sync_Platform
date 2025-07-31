@@ -1,170 +1,164 @@
-import React, { useState } from "react";
-import "./App.css";
+import React, { useRef, useState } from 'react';
+import './App.css';
 
-/**
- * PUBLIC_INTERFACE
- * The main application layout for the Subtitle Sync Platform Dashboard.
- * Provides card containers for uploads, progress, and subtitle management,
- * with visually engaging UI components per branded design (see App.css).
- */
+// PUBLIC_INTERFACE
 function App() {
-  // State for file uploading and basic simulated progress for demonstration
+  /** 
+   * Dashboard UI for uploading videos/subtitles, monitoring progress,
+   * listing processed/corrected subtitle files, and providing download links.
+   */
+  const videoInputRef = useRef();
+  const subtitleInputRef = useRef();
   const [videoFile, setVideoFile] = useState(null);
   const [subtitleFile, setSubtitleFile] = useState(null);
-  const [uploadStatus, setUploadStatus] = useState("");
-  const [progress, setProgress] = useState(0);
-  // Simulated subtitle items
-  const [subtitleList, setSubtitleList] = useState([
-    {id: 1, name: "Episode1.en.srt", status: "Ready", lang: "en"},
-    {id: 2, name: "Episode1.fr.srt", status: "In Progress", lang: "fr"},
+  const [uploading, setUploading] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [processedFiles, setProcessedFiles] = useState([
+    // Example prefilled; in real app, fetched from backend
+    // { filename: "example_corrected.srt", url: "/downloads/example_corrected.srt" }
   ]);
+  const [message, setMessage] = useState('');
 
-  // Simulate upload & progress for demo UI
-  const handleUpload = (e) => {
+  // PUBLIC_INTERFACE
+  const handleUpload = async (e) => {
     e.preventDefault();
-    if (!videoFile || !subtitleFile) {
-      setUploadStatus("Please select both video and subtitle files.");
+    setMessage('');
+    if (!videoFile && !subtitleFile) {
+      setMessage('Please select at least a video or subtitle file.');
       return;
     }
-    setProgress(0);
-    setUploadStatus("Uploading...");
-    let progressStep = 0;
-    const interval = setInterval(() => {
-      progressStep += 20;
-      setProgress(progressStep);
-      if (progressStep >= 100) {
-        clearInterval(interval);
-        setUploadStatus("Upload complete! Starting subtitle analysis...");
-        setTimeout(() => setUploadStatus("Processing complete. Subtitles ready."), 1800);
-      }
-    }, 450);
+    setUploading(true);
+    setProcessing(true);
+
+    // --- Replace with real API call ---
+    await new Promise((res) => setTimeout(res, 1500)); // Simulate upload delay
+    setProcessing(false);
+
+    // Mock: append new file to processedFiles
+    if (subtitleFile) {
+      // Make filename unique/demonstrative for the example
+      const d = new Date();
+      const correctedName = `corrected_${d.getTime()}_${subtitleFile.name}`;
+      setProcessedFiles([
+        ...processedFiles,
+        {
+          filename: correctedName,
+          url: `#download-link-${correctedName}`,
+        },
+      ]);
+      setMessage('Subtitle processed and ready for download.');
+    } else {
+      setMessage('File uploaded (no subtitles to process).');
+    }
+
+    setUploading(false);
+    setVideoFile(null);
+    setSubtitleFile(null);
+    videoInputRef.current.value = '';
+    subtitleInputRef.current.value = '';
   };
 
-  const handleFileChange = (type, e) => {
-    const file = e.target.files[0];
-    if (type === "video") setVideoFile(file);
-    else setSubtitleFile(file);
-  };
-
-  // --- Dashboard
   return (
-    <div>
-      <header className="app-header">
-        <h1>Subtitle Sync Platform</h1>
-        <p>
-          AI-powered workflow for subtitle-audio sync, QC, and fast multi-language subtitle generation.
+    <div className="dashboard-container">
+      <header className="header">
+        <h1>Subtitle Sync Platform Dashboard</h1>
+        <p className="header-tag">
+          Effortlessly synchronize, generate, and correct subtitles for your videos.
         </p>
       </header>
-      <div className="dashboard-container">
-        <div className="dashboard-grid">
-          <main className="dashboard-main">
-            {/* Card: Upload panel */}
-            <section className="dashboard-card" aria-labelledby="section-upload">
-              <div className="section-title" id="section-upload">
-                Upload Video &amp; Subtitle
-              </div>
-              <form onSubmit={handleUpload} autoComplete="off" style={{display:"flex", flexDirection:"column", gap:"1.15em"}}>
-                <div className="form-group">
-                  <label htmlFor="video-upload">Video File</label>
-                  <input
-                    id="video-upload"
-                    type="file"
-                    accept="video/*"
-                    onChange={(e) => handleFileChange("video", e)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="subtitle-upload">Subtitle File</label>
-                  <input
-                    id="subtitle-upload"
-                    type="file"
-                    accept=".srt,.vtt,.ass,.sub"
-                    onChange={(e) => handleFileChange("subtitle", e)}
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={!videoFile || !subtitleFile || uploadStatus.includes("Uploading")}
-                >
-                  Upload &amp; Analyze
-                </button>
-                {uploadStatus && (
-                  <div
-                    className={`status-message ${
-                      uploadStatus.toLowerCase().includes("complete")
-                        ? "status-success"
-                        : uploadStatus.toLowerCase().includes("error") || uploadStatus.toLowerCase().includes("please")
-                        ? "status-danger"
-                        : uploadStatus.toLowerCase().includes("uploading")
-                        ? "status-warning"
-                        : ""
-                    }`}
-                    style={{marginTop: ".5em"}}
-                    aria-live="polite"
-                  >
-                    {uploadStatus}
-                  </div>
-                )}
-                {progress > 0 && progress < 100 && (
-                  <div className="progress-bar-container" aria-label="Upload Progress" aria-valuenow={progress}>
-                    <div className="progress-bar" style={{ width: `${progress}%` }}></div>
-                  </div>
-                )}
-              </form>
-            </section>
 
-            {/* Card: Subtitle workflow */}
-            <section className="dashboard-card" aria-labelledby="section-subtitle">
-              <div className="section-title" id="section-subtitle">
-                Subtitle Files &amp; Management
-              </div>
-              <ul className="subtitle-list" style={{marginTop:'1em'}}>
-                {subtitleList.map(sub => (
-                  <li className="subtitle-item" key={sub.id}>
-                    <div>
-                      <span role="img" aria-label="Subtitle File">🗎</span> <strong>{sub.name}</strong>
-                      <span style={{marginLeft:10, color:"var(--color-subtext)", fontSize:'.96em'}}>({sub.lang})</span>
-                    </div>
-                    <div className="subtitle-actions">
-                      <span className={
-                          sub.status === "Ready"
-                            ? "status-success"
-                            : sub.status === "In Progress"
-                            ? "status-warning"
-                            : ""
-                        }>{sub.status}
-                      </span>
-                      <button className="button-like" style={{padding:'0.4em 1.4em', fontSize:'.98em'}}>Download</button>
-                      <button
-                        className="button-like"
-                        style={{
-                          padding:'0.4em 1.3em',
-                          background: 'linear-gradient(90deg, #ffae42, #fffde4)',
-                          color: '#b45d0c'
-                        }}>Edit</button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </main>
-          <aside className="dashboard-side">
-            {/* Card: Demo panel for future features */}
-            <section className="dashboard-card" aria-labelledby="section-info">
-              <div className="section-title" id="section-info">How it Works</div>
-              <p>
-                <strong>1.</strong> <b>Upload</b> your video and subtitle files.<br/>
-                <strong>2.</strong> Our AI checks timing, format, compliance, and quality.<br/>
-                <strong>3.</strong> Download or edit auto-corrected subtitles.<br/>
-                <strong>4.</strong> Advanced: request translations, batch QC, or manual tweaks.
-              </p>
-              <p style={{fontSize:".92em", color:"var(--color-subtext)"}}>
-                Need help? Contact <a href="mailto:support@subsync.ai" style={{color:"var(--color-primary)"}}>support@subsync.ai</a>
-              </p>
-            </section>
-          </aside>
-        </div>
-      </div>
+      <main className="main-content">
+        <section className="upload-section card">
+          <h2>Upload Video & Subtitle</h2>
+          <form onSubmit={handleUpload} className="upload-form">
+            <div className="form-group">
+              <label htmlFor="video-upload">
+                Video File:
+                <input
+                  id="video-upload"
+                  type="file"
+                  accept="video/*"
+                  ref={videoInputRef}
+                  onChange={(e) => setVideoFile(e.target.files[0])}
+                  disabled={uploading}
+                />
+              </label>
+            </div>
+            <div className="form-group">
+              <label htmlFor="subtitle-upload">
+                Subtitle File:
+                <input
+                  id="subtitle-upload"
+                  type="file"
+                  accept=".srt,.vtt,.ass,.sub"
+                  ref={subtitleInputRef}
+                  onChange={(e) => setSubtitleFile(e.target.files[0])}
+                  disabled={uploading}
+                />
+              </label>
+            </div>
+            <button
+              className="upload-btn"
+              disabled={uploading || (!videoFile && !subtitleFile)}
+              type="submit"
+            >
+              {uploading ? 'Uploading...' : 'Upload'}
+            </button>
+          </form>
+          <div className="upload-info">
+            <span>Supported Subtitle Formats: SRT, VTT, ASS, SUB</span>
+            <span>Supported Video Formats: mp4, mkv, mov, avi, webm</span>
+          </div>
+          {message && <div className="msg">{message}</div>}
+        </section>
+
+        <section className="status-section card">
+          <h2>Processing Status</h2>
+          {processing ? (
+            <div className="status-row">
+              <div className="spinner"></div>
+              <div className="status-text">Processing files, please wait...</div>
+            </div>
+          ) : (
+            <div className="status-row">
+              <div className="status-done">No jobs in progress.</div>
+            </div>
+          )}
+        </section>
+
+        <section className="downloads-section card">
+          <h2>Processed Subtitles</h2>
+          {processedFiles.length === 0 ? (
+            <div>No processed subtitles yet. Upload to begin!</div>
+          ) : (
+            <ul className="downloads-list">
+              {processedFiles.map((f, idx) => (
+                <li key={idx}>
+                  <span className="download-filename">{f.filename}</span>
+                  <a
+                    href={f.url}
+                    className="download-link"
+                    download={f.filename}
+                  >
+                    Download
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="download-hint">
+            <strong>Where to download corrected subtitles?</strong>
+            <br />
+            Download links for corrected subtitles are provided above. Click "Download" next to your processed file.
+          </div>
+        </section>
+      </main>
+
+      <footer className="footer">
+        <span>&copy; {new Date().getFullYear()} Subtitle Sync Platform
+          &nbsp;|&nbsp; Powered by LLM & OTT Technology
+        </span>
+      </footer>
     </div>
   );
 }
