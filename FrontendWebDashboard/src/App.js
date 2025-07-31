@@ -2,6 +2,20 @@ import React, { useState, useEffect, useRef } from "react";
 import "./App.css";
 
 /**
+ * Returns the backend API base URL from environment variable.
+ * Falls back to a sensible default if not provided.
+ */
+// PUBLIC_INTERFACE
+function getApiBase() {
+  let base = process.env.REACT_APP_API_BASE;
+  if (!base || typeof base !== 'string' || !base.trim()) {
+    // Fallback: assumes backend is on port 3001 (default for this app)
+    base = "http://localhost:3001";
+  }
+  return base.replace(/\/+$/, ""); // Remove trailing slashes
+}
+
+/**
  * PUBLIC_INTERFACE
  * App Root for Subtitle Sync Platform Dashboard.
  * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, accessible feedback, and result/error display.
@@ -35,6 +49,27 @@ function App() {
   const [error, setError] = useState(null);
   const [polling, setPolling] = useState(false);
   const [announce, setAnnounce] = useState(""); // For aria-live
+
+  // Backend health check state
+  const [backendStatus, setBackendStatus] = useState("...");
+  const apiBase = getApiBase();
+
+  useEffect(() => {
+    // Health check fetch to backend using environment config, on mount.
+    async function checkBackend() {
+      try {
+        const resp = await fetch(`${apiBase}/healthz`, { method: "GET" });
+        if (!resp.ok) throw new Error();
+        setBackendStatus("Backend connected!");
+      } catch {
+        setBackendStatus(
+          `❗ Backend unreachable at "${apiBase}". Check REACT_APP_API_BASE and backend service.`
+        );
+      }
+    }
+    checkBackend();
+    // eslint-disable-next-line
+  }, [apiBase]);
 
   // Brand color palette for styling (aligned with extracted palette)
   const brandPalette = {
@@ -88,8 +123,7 @@ function App() {
       formData.append("video_file", correctionVideo);
       formData.append("subtitle_file", correctionSub);
 
-      const API_BASE = process.env.REACT_APP_API_BASE || "";
-      const resp = await fetch(`${API_BASE}/api/correction`, {
+      const resp = await fetch(`${apiBase}/api/correction`, {
         method: "POST",
         body: formData,
       });
@@ -112,9 +146,13 @@ function App() {
       setUploading(false);
       // Improved error handling: detect "Failed to fetch" network errors and display actionable help.
       let errMsg = "Failed to upload files. Please try again or check network connection.";
-      if (err?.message && (err.message.includes("Failed to fetch") || err.message.includes("NetworkError"))) {
-        errMsg = "Network error: Could not contact the backend API. This may be due to an incorrect REACT_APP_API_BASE, CORS settings, or that the backend service is not running.\n"
-          + "Check that your backend is running on the correct URL and port, and that REACT_APP_API_BASE matches that location.";
+      if (
+        err?.message &&
+        (err.message.includes("Failed to fetch") || err.message.includes("NetworkError"))
+      ) {
+        errMsg =
+          "Network error: Could not contact the backend API. This may be due to an incorrect REACT_APP_API_BASE, CORS settings, or that the backend service is not running.\n" +
+          "Check that your backend is running on the correct URL and port, and that REACT_APP_API_BASE matches that location.";
       } else if (err?.message) {
         errMsg = err.message;
       }
@@ -143,8 +181,7 @@ function App() {
       const formData = new FormData();
       formData.append("video_file", generationVideo);
       formData.append("language", generationLang);
-      const API_BASE = process.env.REACT_APP_API_BASE || "";
-      const resp = await fetch(`${API_BASE}/api/generation`, {
+      const resp = await fetch(`${apiBase}/api/generation`, {
         method: "POST",
         body: formData,
       });
@@ -175,11 +212,10 @@ function App() {
   // Poll job status when jobId & polling
   useEffect(() => {
     let pollInt = null;
-    const API_BASE = process.env.REACT_APP_API_BASE || "";
     if (jobId && polling) {
       pollInt = setInterval(async () => {
         try {
-          const resp = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+          const resp = await fetch(`${apiBase}/api/jobs/${jobId}`);
           if (!resp.ok) throw new Error("Could not check job status");
           const job = await resp.json();
           setJobStatus(job);
@@ -205,13 +241,11 @@ function App() {
               job.output_subtitle_id &&
               job.output_subtitle_id !== null
             ) {
-              // Try fetch subtitle record to get path/filename
               try {
                 const subResp = await fetch(
-                  `${API_BASE}/api/subtitles/${job.output_subtitle_id}`
+                  `${apiBase}/api/subtitles/${job.output_subtitle_id}`
                 );
                 if (subResp.ok) {
-                  // Optionally display a download link if backend supports static files
                   setDownloadLink(null);
                 }
               } catch {}
@@ -230,7 +264,7 @@ function App() {
       if (pollInt) clearInterval(pollInt);
     };
     // eslint-disable-next-line
-  }, [jobId, polling]);
+  }, [jobId, polling, apiBase]);
 
   // Notice - clear error if any state changes and update aria-live
   useEffect(() => {
@@ -244,7 +278,6 @@ function App() {
   // Focus management: announce live polite region to a11y users
   useEffect(() => {
     if (announce && announce.length > 2) {
-      // Focus on status region for screenreader feedback
       const region = document.getElementById("status-announcement");
       if (region) region.focus();
     }
@@ -252,7 +285,6 @@ function App() {
 
   // Render upload/progress/result panel for workflows, with a11y enhancements, helpful status notes, and validation feedback
   function renderStatusPanel() {
-    // Error with focus and bold style for a11y (role=alert)
     if (error)
       return (
         <div
@@ -299,7 +331,6 @@ function App() {
         </div>
       );
 
-    // Job status with details, progress and adaptive color
     if (jobId && jobStatus) {
       return (
         <div
@@ -322,17 +353,14 @@ function App() {
             Job Status:{" "}
             <span style={{ color: statusColor(jobStatus.status) }}>
               {jobStatus.status?.toUpperCase() || "loading..."}
-            </span>
-            {" "}
+            </span>{" "}
             {jobStatus.status === "success" && <span aria-label="success" style={{color:"#3cc878"}}>✔️</span>}
             {jobStatus.status === "error" && <span aria-label="failure" style={{color:"#ED4C8B"}}>❌</span>}
           </strong>
           <br />
           <span>
             {jobStatus.message ||
-              (jobStatus.status === "success"
-                ? "Complete"
-                : "Processing...")}
+              (jobStatus.status === "success" ? "Complete" : "Processing...")}
           </span>
           {typeof jobStatus.progress === "number" &&
             jobStatus.status !== "success" && (
@@ -389,7 +417,6 @@ function App() {
         </div>
       );
     }
-    // Explanatory info about workflow below forms (now includes brand highlight and a11y-friendly tips)
     return (
       <div
         aria-live="polite"
@@ -516,6 +543,21 @@ function App() {
           AI-powered subtitle correction and generation for your videos.
           Start by selecting a workflow below.
         </p>
+        <div
+          className="backend-status"
+          style={{
+            marginTop: 7,
+            fontSize: "1em",
+            color: backendStatus.startsWith("❗") ? "#ED4C8B" : "#FFC60B",
+            background: backendStatus.startsWith("❗") ? "#ffe3ed" : "#fff9e6",
+            borderRadius: 8,
+            padding: "7px 12px",
+            fontWeight: 550,
+            boxShadow: backendStatus.startsWith("❗") ? "0 3px 6px #ed4c8b22" : "0 1.5px 3px #ffc60b22",
+          }}
+        >
+          {backendStatus}
+        </div>
       </header>
 
       <main className="dashboard-main">
@@ -731,7 +773,7 @@ function App() {
 
       <footer className="dashboard-footer" style={{ background: brandPalette.primaryBlue, color: brandPalette.neutralWhite }}>
         <span>
-          © {new Date().getFullYear()} Subtitle Sync Platform &mdash; All Rights Reserved.
+          © {new Date().getFullYear()} Subtitle Sync Platform — All Rights Reserved.
         </span>
       </footer>
     </div>
