@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # File storage settings
     upload_dir: str = "uploads"
     processed_dir: str = "processed"
-    max_file_size_mb: int = 500
+    max_file_size_mb: int = 2048  # Increased to 2GB for large video files
     allowed_video_extensions: list = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"]
     allowed_subtitle_extensions: list = [".srt", ".vtt", ".ass", ".ssa", ".scc", ".sub", ".smi", ".sami"]
     
@@ -67,8 +67,11 @@ class Settings(BaseSettings):
     cors_origins: list = [
         "http://localhost:3000",
         "http://localhost:3001",
+        "http://localhost:3002",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000"
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",
+        "https://*.beta01.cloud.kavia.ai:3002"
     ]
     
     # Logging settings

@@ -22,6 +22,7 @@ from pathlib import Path
 import subprocess
 import re
 from subtitle_processor import subtitle_processor
+from middleware import FileSizeMiddleware, CORSHeadersMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,16 +67,22 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "http://localhost:3001",  # Add backend port for potential cross-origin requests
+        "http://localhost:3002",  # Add local port 3002
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"  # Add new frontend URL for port 3002
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",  # Add new frontend URL for port 3002
+        "https://*.beta01.cloud.kavia.ai:3002"  # Wildcard for any cloud frontend on port 3002
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add custom middlewares for file upload handling
+app.add_middleware(FileSizeMiddleware, max_upload_size=2 * 1024 * 1024 * 1024)  # 2GB limit
+app.add_middleware(CORSHeadersMiddleware)
 
 # Security
 security = HTTPBearer(auto_error=False)

@@ -111,7 +111,11 @@ class BackendApplication:
                 port=self.config.settings.port,
                 reload=self.config.settings.reload,
                 log_level=self.config.settings.log_level.lower(),
-                access_log=True
+                access_log=True,
+                limit_max_requests=1000,
+                limit_concurrency=1000,
+                timeout_keep_alive=30,
+                timeout_graceful_shutdown=30
             )
             
             server = uvicorn.Server(config)
@@ -138,7 +142,11 @@ def run_development_server():
         port=config.settings.port,
         reload=True,
         log_level="debug",
-        access_log=True
+        access_log=True,
+        limit_max_requests=1000,
+        limit_concurrency=1000,
+        timeout_keep_alive=30,
+        timeout_graceful_shutdown=30
     )
 
 # PUBLIC_INTERFACE
