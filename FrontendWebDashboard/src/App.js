@@ -1,159 +1,223 @@
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import "./App.css";
 
-/**
- * PUBLIC_INTERFACE
- * Root application component for the Subtitle Sync Dashboard.
- * Provides UI for uploading videos/subtitles, monitoring progress, and accessing downloads.
- */
+// Brand color palette
+const COLORS = {
+  primary: "#4953A6",
+  secondary: "#6C73D0",
+  accent: "#E8EAF6",
+  background: "#F9FAFC",
+  navActive: "#373F83",
+  navInactive: "#ABADE3",
+  border: "#C3C6E1",
+  statusSuccess: "#8BC34A",
+  statusWarning: "#FBC02D",
+  statusError: "#E57373",
+};
+
 function App() {
-  const videoInputRef = useRef(null);
-  const subtitleInputRef = useRef(null);
+  // State management for workflow selection and forms/results
+  const [workflow, setWorkflow] = useState("correction"); // "correction" or "generation"
+  const [correctionVideo, setCorrectionVideo] = useState(null);
+  const [correctionSubtitle, setCorrectionSubtitle] = useState(null);
+  const [generationVideo, setGenerationVideo] = useState(null);
+  const [generationLanguage, setGenerationLanguage] = useState("");
+  const [status, setStatus] = useState("");
+  const [resultUrl, setResultUrl] = useState(null);
 
-  // State for demo: track uploaded files and processing state
-  const [videoFile, setVideoFile] = useState(null);
-  const [subtitleFile, setSubtitleFile] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [jobComplete, setJobComplete] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState(null);
+  // Supported languages for generation workflow
+  const SUPPORTED_LANGUAGES = [
+    "English",
+    "Spanish",
+    "French",
+    "German",
+    "Chinese",
+    // Add more as required
+  ];
 
-  // Simulate upload & processing (in real app, use API calls)
-  const handleSelectVideo = () => videoInputRef.current.click();
-  const handleSelectSubtitle = () => subtitleInputRef.current.click();
-
-  const handleVideoChange = (event) => {
-    const file = event.target.files[0];
-    if (file) setVideoFile(file);
+  // Handlers for input changes
+  const handleCorrectionVideoChange = (e) => {
+    setCorrectionVideo(e.target.files[0]);
   };
 
-  const handleSubtitleChange = (event) => {
-    const file = event.target.files[0];
-    if (file) setSubtitleFile(file);
+  const handleCorrectionSubtitleChange = (e) => {
+    setCorrectionSubtitle(e.target.files[0]);
   };
 
-  // Simulate API Job Trigger
-  const handleStartProcessing = () => {
-    if (!videoFile || !subtitleFile) return;
-    setProcessing(true);
-    setJobComplete(false);
-    // Simulate processing delay and completion
+  const handleGenerationVideoChange = (e) => {
+    setGenerationVideo(e.target.files[0]);
+  };
+
+  const handleGenerationLanguageChange = (e) => {
+    setGenerationLanguage(e.target.value);
+  };
+
+  // Reset forms & result when changing workflow
+  const handleWorkflowSelect = (wf) => {
+    setWorkflow(wf);
+    setStatus("");
+    setResultUrl(null);
+    setCorrectionVideo(null);
+    setCorrectionSubtitle(null);
+    setGenerationVideo(null);
+    setGenerationLanguage("");
+  };
+
+  // Demo stub for API call (replace with real API integration)
+  const fakeApiSubmit = (formData, endpoint) => {
+    setStatus("Processing...");
     setTimeout(() => {
-      // Simulate processed file URL
-      setDownloadUrl("/sample_processed_subtitle.srt");
-      setProcessing(false);
-      setJobComplete(true);
+      setStatus("Success! Your file has been processed.");
+      setResultUrl("/demo/subtitle_file.srt"); // Simulated download link
     }, 1800);
   };
 
-  // Call-to-action supportive and accessible text
-  const downloadSupportText = "Your file is ready! Click the button above to download your processed subtitles.";
+  // Submission handlers
+  const handleCorrectionSubmit = (e) => {
+    e.preventDefault();
+    if (!correctionVideo || !correctionSubtitle) {
+      setStatus("Please upload both a video and a subtitle file.");
+      return;
+    }
+    // Prepare FormData and make the actual API request in production
+    const formData = new FormData();
+    formData.append("video", correctionVideo);
+    formData.append("subtitle", correctionSubtitle);
+    fakeApiSubmit(formData, "/api/subtitle-correction");
+  };
+
+  const handleGenerationSubmit = (e) => {
+    e.preventDefault();
+    if (!generationVideo || !generationLanguage) {
+      setStatus("Please upload a video and select a language.");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("video", generationVideo);
+    formData.append("language", generationLanguage);
+    fakeApiSubmit(formData, "/api/subtitle-generation");
+  };
+
+  // Download handler (for demo)
+  const handleDownload = (e) => {
+    e.preventDefault();
+    // handle download logic
+    window.alert("Download would start here (demo).");
+  };
 
   return (
-    <div className="dashboard-root">
-      <header className="dashboard-header">
-        <h1>Subtitle Sync Platform</h1>
-        <p>
-          Streamline subtitle-audio synchronization and subtitle generation for your videos
-        </p>
+    <div className="app-root" style={{ background: COLORS.background }}>
+      <header className="app-header" style={{ background: COLORS.primary }}>
+        <h1 className="app-title">Subtitle Sync Platform</h1>
       </header>
-      <main className="dashboard-content">
-        <section className="upload-section">
-          <h2>Upload Files</h2>
-          <div className="uploader-controls">
-            <button className="upload-btn" onClick={handleSelectVideo}>
-              Upload Video
-            </button>
-            <input
-              type="file"
-              accept="video/*"
-              ref={videoInputRef}
-              style={{ display: "none" }}
-              onChange={handleVideoChange}
-              aria-label="Upload Video"
-            />
-            <button className="upload-btn" onClick={handleSelectSubtitle}>
-              Upload Subtitle
-            </button>
-            <input
-              type="file"
-              accept=".srt,.vtt,.ass,.sub"
-              ref={subtitleInputRef}
-              style={{ display: "none" }}
-              onChange={handleSubtitleChange}
-              aria-label="Upload Subtitle File"
-            />
-            <button
-              className="process-btn"
-              onClick={handleStartProcessing}
-              disabled={!videoFile || !subtitleFile || processing}
+      {/* Workflow selection navigation */}
+      <nav className="workflow-nav">
+        <button
+          className={`nav-btn${workflow === "correction" ? " active" : ""}`}
+          style={workflow === "correction"
+            ? { background: COLORS.navActive, color: "#fff", borderColor: COLORS.primary }
+            : { background: COLORS.navInactive, color: "#222", borderColor: COLORS.border }
+          }
+          onClick={() => handleWorkflowSelect("correction")}
+        >
+          Subtitle Correction
+        </button>
+        <button
+          className={`nav-btn${workflow === "generation" ? " active" : ""}`}
+          style={workflow === "generation"
+            ? { background: COLORS.navActive, color: "#fff", borderColor: COLORS.primary }
+            : { background: COLORS.navInactive, color: "#222", borderColor: COLORS.border }
+          }
+          onClick={() => handleWorkflowSelect("generation")}
+        >
+          Subtitle Generation
+        </button>
+      </nav>
+      {/* Main workflow sections */}
+      <main className="workflow-container">
+        {/* Subtitle Correction Workflow */}
+        {workflow === "correction" && (
+          <section className="workflow-panel">
+            <h2>Subtitle Correction</h2>
+            <form className="upload-form" onSubmit={handleCorrectionSubmit}>
+              <div className="form-group">
+                <label>Upload Video File</label>
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={handleCorrectionVideoChange}
+                />
+              </div>
+              <div className="form-group">
+                <label>Upload Subtitle File</label>
+                <input
+                  type="file"
+                  accept=".srt,.vtt,.ass"
+                  onChange={handleCorrectionSubtitleChange}
+                />
+              </div>
+              <button className="submit-btn" type="submit">
+                Run Correction
+              </button>
+            </form>
+          </section>
+        )}
+        {/* Subtitle Generation Workflow */}
+        {workflow === "generation" && (
+          <section className="workflow-panel">
+            <h2>Subtitle Generation</h2>
+            <form className="upload-form" onSubmit={handleGenerationSubmit}>
+              <div className="form-group">
+                <label>Upload Video File</label>
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={handleGenerationVideoChange}
+                />
+              </div>
+              <div className="form-group">
+                <label>Select Subtitle Language</label>
+                <select value={generationLanguage} onChange={handleGenerationLanguageChange}>
+                  <option value="">--Select Language--</option>
+                  {SUPPORTED_LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+              </div>
+              <button className="submit-btn" type="submit">
+                Generate Subtitles
+              </button>
+            </form>
+          </section>
+        )}
+        {/* Status / Result section */}
+        <section className="status-section">
+          {status && (
+            <div
+              className={`status-msg${status.toLowerCase().includes("success") ? " success"
+                : status.toLowerCase().includes("processing") ? " loading" : " error"
+              }`}
+              style={
+                status.toLowerCase().includes("success")
+                  ? { color: COLORS.statusSuccess }
+                  : status.toLowerCase().includes("processing")
+                    ? { color: COLORS.primary }
+                    : { color: COLORS.statusError }
+              }
             >
-              {processing ? "Processing..." : "Start"}
-            </button>
-          </div>
-          <div className="hint-text">
-            <small>
-              Supported formats: SRT, VTT, ASS, SUB. Multiple languages and formats supported.
-            </small>
-          </div>
-          <div style={{marginTop: "0.5rem", minHeight:"1.7em"}}>
-            {videoFile && (
-              <span>🎬 {videoFile.name}</span>
-            )}
-            {subtitleFile && (
-              <span style={{marginLeft: "1.5em"}}>📝 {subtitleFile.name}</span>
-            )}
-          </div>
-        </section>
-        <section className="progress-section">
-          <h2>Processing Progress</h2>
-          {processing ? (
-            <div className="progress-placeholder">
-              <span className="spinner" aria-hidden="true"></span> Processing... Please wait.
-            </div>
-          ) : jobComplete ? (
-            <div className="progress-placeholder complete">
-              ✅ Processing complete!
-            </div>
-          ) : (
-            <div className="progress-placeholder">
-              No jobs currently processing.
+              {status}
             </div>
           )}
-        </section>
-
-        {/* Download section with prominent button */}
-        <section className="download-section" aria-live="polite">
-          <h2>Download Processed Subtitles</h2>
-          {(jobComplete && downloadUrl) ? (
-            <div className="download-result-area" role="region" aria-label="Download Processed Subtitle">
-              <a
-                href={downloadUrl}
-                download
-                className="cta-download-btn"
-                role="button"
-                aria-label="Download your processed subtitle file"
-                tabIndex={0}
-                autoFocus
-              >
-                <span className="cta-download-text">
-                  <svg width="22" height="22" style={{verticalAlign:"middle",marginRight:"0.55em", marginTop:"-2px"}} fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24"><path d="M12 5v13m0 0l-5-5m5 5l5-5"></path></svg>
-                  Download Subtitle File
-                </span>
-              </a>
-              <div className="cta-support-text" id="cta-support">
-                {downloadSupportText}
-              </div>
-            </div>
-          ) : (
-            <div className="download-placeholder">
-              Processed subtitle files will appear here for download.
-            </div>
+          {resultUrl && (
+            <button className="download-btn" onClick={handleDownload}>
+              Download Result
+            </button>
           )}
         </section>
       </main>
-      <footer className="dashboard-footer">
+      <footer className="app-footer">
         <span>
-          &copy; 2024 Subtitle Sync Platform. Powered by LLMs. All rights reserved.
+          &copy; {new Date().getFullYear()} Subtitle Sync Platform
         </span>
       </footer>
     </div>

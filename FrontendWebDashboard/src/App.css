@@ -1,255 +1,222 @@
-.dashboard-root {
-  font-family: "Segoe UI", Arial, sans-serif;
+:root {
+  --primary: #4953A6;
+  --secondary: #6C73D0;
+  --accent: #E8EAF6;
+  --background: #F9FAFC;
+  --nav-active: #373F83;
+  --nav-inactive: #ABADE3;
+  --border: #C3C6E1;
+  --status-success: #8BC34A;
+  --status-warning: #FBC02D;
+  --status-error: #E57373;
+}
+
+body {
+  background: var(--background);
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Root container */
+.app-root {
   min-height: 100vh;
-  background: #f2f4f8;
-  color: #363636;
   display: flex;
   flex-direction: column;
 }
 
-.dashboard-header {
-  background: #223056;
+/* Header */
+.app-header {
+  background: var(--primary);
   color: #fff;
   padding: 2rem 0 1rem 0;
   text-align: center;
-  box-shadow: 0 2px 8px rgba(60, 60, 120, 0.03);
+  box-shadow: 0 2px 8px 0 rgba(73, 83, 165, 0.06);
 }
 
-.dashboard-header h1 {
+.app-title {
   margin: 0;
-  font-size: 2.6rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-.dashboard-header p {
-  margin-top: 0.7rem;
-  font-size: 1.1rem;
-  font-weight: 400;
-  color: #dae5fd;
+  font-size: 2rem;
+  letter-spacing: 3px;
+  font-weight: bold;
 }
 
-.dashboard-content {
-  flex: 1;
+/* Workflow Navigation */
+.workflow-nav {
   display: flex;
-  gap: 2rem;
   justify-content: center;
-  align-items: flex-start;
-  margin: 2.5rem auto;
-  max-width: 1100px;
-  width: 100%;
-  flex-wrap: wrap;
+  background: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0 0.25rem;
 }
 
-.upload-section,
-.progress-section,
-.download-section {
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(160, 180, 205, 0.08);
-  min-width: 300px;
-  flex-basis: 30%;
-  padding: 2rem 1.5rem 1.7rem 1.5rem;
+.nav-btn {
+  font-size: 1.1rem;
+  font-weight: 500;
+  background: var(--nav-inactive);
+  color: #222;
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  padding: 0.85rem 2.1rem;
+  margin: 0 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  outline: none;
+}
+
+.nav-btn.active,
+.nav-btn:focus {
+  background: var(--nav-active);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+/* Main container */
+.workflow-container {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding: 2.5rem 1rem;
+  max-width: 540px;
+  margin: 0 auto;
+}
+
+/* Panels for individual workflows */
+.workflow-panel {
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px 0 rgba(103, 115, 216, 0.10);
+  padding: 2rem 2.5rem 1.5rem 2.5rem;
   margin-bottom: 2rem;
 }
 
-.upload-section h2,
-.progress-section h2,
-.download-section h2 {
-  margin: 0 0 1.5rem 0;
-  font-size: 1.29rem;
-  font-weight: 600;
-  color: #304474;
+.workflow-panel h2 {
+  margin-top: 0;
+  color: var(--primary);
+  font-size: 1.45rem;
+  margin-bottom: 1.4rem;
 }
 
-.uploader-controls {
-  display: flex;
-  gap: 1.25rem;
-  margin-bottom: 0.8rem;
-  flex-wrap: wrap;
-}
-
-.upload-btn, .process-btn {
-  background: #4169e1;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 500;
-  padding: 0.75rem 1.3rem;
-  cursor: pointer;
-  transition: background 0.17s, transform 0.15s;
-  outline: none;
-}
-
-.process-btn {
-  background: #13ad65;
-  margin-left: 0.5em;
-  min-width: 90px;
-}
-
-.upload-btn:focus, .upload-btn:hover,
-.process-btn:focus, .process-btn:hover {
-  background: #2540a8;
-  transform: translateY(-2px) scale(1.04);
-}
-
-.process-btn:focus, .process-btn:hover {
-  background: #0e783d;
-}
-
-.process-btn:disabled {
-  background: #B6D5C3;
-  color: #eee;
-  cursor: not-allowed;
-}
-.hint-text {
-  margin-top: 0.5rem;
-  text-align: center;
-  color: #888;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
-}
-
-.progress-placeholder,
-.download-placeholder {
-  color: #ccc;
-  padding: 2.5rem 0;
-  font-size: 1.08rem;
-  text-align: center;
-}
-
-.progress-placeholder.complete {
-  color: #149957;
-  font-weight: 600;
-}
-.spinner {
-  display: inline-block;
-  width: 1.32em;
-  height: 1.32em;
-  border: 0.23em solid #bccffd;
-  border-radius: 50%;
-  border-right: 0.23em solid #598ceb;
-  margin-right: 0.7em;
-  animation: spinner-rotate 1.2s linear infinite;
-}
-@keyframes spinner-rotate {
-  100% { transform: rotate(360deg);}
-}
-
-/* --- Prominent CTA Download Button Styles --- */
-.cta-download-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(90deg, #005f99 0%, #11b57b 100%);
-  color: #fff !important;
-  border: none;
-  border-radius: 8px;
-  font-size: 1.2rem;
-  font-weight: bold;
-  padding: 1.15em 2.3em;
-  margin: 1.2em 0 0.6em 0;
-  text-decoration: none;
-  box-shadow: 0 4px 16px rgba(30,60,150,0.09);
-  cursor: pointer;
-  transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
-  outline: none;
-}
-.cta-download-btn:focus, .cta-download-btn:active {
-  background: linear-gradient(90deg, #0077cc 0%, #17cc95 100%);
-  box-shadow: 0 0 0 4px rgba(25,154,211,0.22);
-  transform: scale(1.03);
-}
-.cta-download-btn:hover {
-  background: linear-gradient(90deg, #006597 0%, #15af80 100%);
-  text-decoration: underline;
-  transform: scale(1.01);
-}
-.cta-download-text {
-  display: inline-block;
-  vertical-align: middle;
-  font-size: 1.18em;
-}
-
-.download-result-area {
+/* Upload and selection forms */
+.upload-form .form-group {
+  margin-bottom: 1.35rem;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  margin-bottom: 1.2rem;
-  margin-top: 0.2rem;
 }
 
-.cta-support-text {
-  margin-top: 0.6em;
-  color: #145671;
-  font-size: 1em;
+.upload-form label {
+  margin-bottom: 0.4rem;
+  color: var(--nav-active);
   font-weight: 500;
-  letter-spacing: 0.01rem;
-  text-align: center;
 }
 
-/* legacy download-btn and download-note remain, for fallback or future elements */
-.download-btn {
-  background-color: #2a5bff;
-  color: #fff;
-  padding: 0.75rem 1.5rem;
-  font-size: 1.1rem;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  text-decoration: none;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(42, 91, 255, 0.12);
-  display: inline-flex;
-  align-items: center;
-  transition: background 0.15s;
+.upload-form input[type="file"],
+.upload-form select {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.55rem 0.5rem;
+  font-size: 0.98rem;
+  background: var(--accent);
+  margin-bottom: 0.15rem;
+}
+
+.upload-form input[type="file"]:focus,
+.upload-form select:focus {
+  border-color: var(--primary);
   outline: none;
 }
-.download-btn:hover,
-.download-btn:focus {
-  background-color: #1945b9;
-  text-decoration: none;
+
+.submit-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 0.7rem 2.1rem;
+  font-size: 1.06rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.submit-btn:hover,
+.download-btn:hover {
+  background: var(--secondary);
   color: #fff;
 }
-.download-note {
-  font-size: 0.98rem;
-  color: #0c3f68;
-  margin-top: 0.45rem;
-}
 
-.success-message {
-  margin-top: 0.2rem;
-}
-
-.dashboard-footer {
-  background: #223056;
-  color: #e0e8fa;
+/* Status & results section */
+.status-section {
+  width: 100%;
+  margin: 0 auto;
+  margin-top: 0.5rem;
   text-align: center;
-  padding: 1.2rem 0 1rem 0;
-  letter-spacing: 0.03em;
-  font-size: 1rem;
-  margin-top: auto;
-  border-top: 3px solid #2f4676;
 }
 
-/* Responsive adjustments */
-@media (max-width: 980px) {
-  .dashboard-content {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1.5rem;
-    margin: 1rem 1.5rem;
-    max-width: 98%;
+.status-msg {
+  margin: 0;
+  font-size: 1.09rem;
+  font-weight: 500;
+  padding: 0.65rem;
+  border-radius: 6px;
+  background: var(--accent);
+  border: 1px solid var(--border);
+  margin-bottom: 0.8rem;
+}
+
+.status-msg.success {
+  color: var(--status-success);
+  border-color: var(--status-success);
+  background: #f3f9ee;
+}
+
+.status-msg.loading {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: #eaf1fc;
+}
+
+.status-msg.error {
+  color: var(--status-error);
+  border-color: var(--status-error);
+  background: #fdecec;
+}
+
+/* Download button */
+.download-btn {
+  background: var(--status-success);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 0.7rem 2rem;
+  font-size: 1.03rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* Footer */
+.app-footer {
+  text-align: center;
+  background: var(--accent);
+  color: var(--nav-active);
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 1.2rem 0 1rem 0;
+  box-shadow: 0 -2px 8px 0 rgba(73, 83, 165, 0.04);
+  letter-spacing: 1px;
+  margin-top: 2rem;
+}
+
+/* Responsive adaptations */
+@media (max-width: 700px) {
+  .workflow-container {
+    padding: 1.5rem 0.5rem;
+    max-width: 99vw;
   }
-  .upload-section,
-  .progress-section,
-  .download-section {
-    margin-bottom: 1.2rem;
-    min-width: unset;
-    width: 100%;
-    max-width: unset;
+  .workflow-panel {
+    padding: 1.2rem 1rem;
   }
 }
