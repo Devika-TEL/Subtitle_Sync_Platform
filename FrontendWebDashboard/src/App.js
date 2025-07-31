@@ -36,7 +36,7 @@ const SUPPORTED_LANGUAGES = [
 // Main Dashboard Component
 const Dashboard = () => {
   // State management
-  const [activeTab, setActiveTab] = useState('correction');
+  const [activeTab, setActiveTab] = useState('generation');
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState(null);
   const [jobId, setJobId] = useState(null);
@@ -236,7 +236,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="dashboard-bg">
+    <div className="dashboard-container">
       {/* Notifications */}
       {notification && (
         <Notification
@@ -248,284 +248,386 @@ const Dashboard = () => {
 
       {/* Header */}
       <header className="dashboard-header">
-        <div className="header-content">
-          <img
-            src="https://svgshare.com/i/148G.svg"
-            alt="Subtitle Sync Platform"
-            className="dashboard-logo"
-          />
-          <div className="header-titles">
-            <h1 className="main-title">Subtitle Sync Platform</h1>
-            <span className="subtitle">
-              AI-Powered Subtitle Processing &amp; Translation
-            </span>
-          </div>
-          <div className="header-actions">
-            <button
-              className="file-manager-btn"
-              onClick={() => setShowFileManager(!showFileManager)}
-            >
-              {showFileManager ? 'Hide Files' : 'My Files'}
-            </button>
-            <button
-              className="file-manager-btn logout-btn"
-              onClick={() => {
-                localStorage.removeItem('authToken');
-                window.location.reload();
-              }}
-            >
-              Logout
-            </button>
+        <div className="container">
+          <div className="header-content">
+            <div className="brand-section">
+              <div className="brand-icon">
+                <div className="icon-gradient">🎬</div>
+              </div>
+              <div className="brand-text">
+                <h1 className="brand-title">SubtitleSync</h1>
+                <p className="brand-tagline">AI-Powered Subtitle Processing</p>
+              </div>
+            </div>
+            
+            <div className="header-actions">
+              <button
+                className={`header-btn files-btn ${showFileManager ? 'active' : ''}`}
+                onClick={() => setShowFileManager(!showFileManager)}
+              >
+                <span className="btn-icon">📁</span>
+                <span>My Files</span>
+                {subtitleFiles.length > 0 && (
+                  <span className="file-count">{subtitleFiles.length}</span>
+                )}
+              </button>
+              <button
+                className="header-btn logout-btn"
+                onClick={() => {
+                  localStorage.removeItem('authToken');
+                  window.location.reload();
+                }}
+              >
+                <span className="btn-icon">🚪</span>
+                <span>Logout</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <nav className="workflow-nav">
-        <div className="workflow-tabs" role="tablist">
-          <button
-            className={`workflow-tab${activeTab === 'correction' ? ' active' : ''}`}
-            onClick={() => {
-              setActiveTab('correction');
-              setJobId(null);
-            }}
-            role="tab"
-            aria-selected={activeTab === 'correction'}
-          >
-            <span>Subtitle Correction</span>
-          </button>
-          <button
-            className={`workflow-tab${activeTab === 'generation' ? ' active' : ''}`}
-            onClick={() => {
-              setActiveTab('generation');
-              setJobId(null);
-            }}
-            role="tab"
-            aria-selected={activeTab === 'generation'}
-          >
-            <span>Subtitle Generation</span>
-          </button>
-        </div>
-      </nav>
-
-      <main className="dashboard-content">
-        {/* Job Progress Tracker */}
-        {jobId && (
-          <ProgressTracker
-            jobId={jobId}
-            onComplete={handleJobComplete}
-            onError={handleJobError}
-          />
-        )}
-
-        {/* File Manager */}
-        {showFileManager && (
-          <section className="file-manager-section">
-            <div className="file-manager-card">
-              <h2>My Subtitle Files</h2>
-              {subtitleFiles.length === 0 ? (
-                <p className="no-files-message">No subtitle files found. Process some videos to see files here.</p>
-              ) : (
-                <div className="file-list">
-                  {subtitleFiles.map((file) => (
-                    <div key={file.id} className="file-item">
-                      <div className="file-info">
-                        <h3 className="file-name">{file.filename}</h3>
-                        <div className="file-details">
-                          <span className="file-language">{file.language}</span>
-                          <span className="file-size">{formatFileSize(file.size)}</span>
-                          <span className="file-date">{new Date(file.created_at).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-                      <div className="file-actions">
-                        <button
-                          className="download-btn"
-                          onClick={() => handleDownloadFile(file.id, file.filename)}
-                        >
-                          Download
-                        </button>
-                        <select
-                          className="translation-select"
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              handleRequestTranslation(file.id, e.target.value);
-                              e.target.value = '';
-                            }
-                          }}
-                          disabled={translationRequests[file.id]}
-                        >
-                          <option value="">Translate to...</option>
-                          {SUPPORTED_LANGUAGES
-                            .filter(lang => lang.code !== file.language)
-                            .map(lang => (
-                              <option key={lang.code} value={lang.code}>
-                                {lang.name}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    </div>
-                  ))}
+      {/* Hero Section */}
+      <section className="hero-section">
+        <div className="container">
+          <div className="hero-content">
+            <h2 className="hero-title">Transform Your Videos with AI</h2>
+            <p className="hero-subtitle">Generate, correct, and translate subtitles with cutting-edge AI technology</p>
+            
+            {/* Enhanced Navigation Tabs */}
+            <div className="feature-tabs">
+              <button
+                className={`feature-tab ${activeTab === 'generation' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('generation');
+                  setJobId(null);
+                }}
+              >
+                <div className="tab-icon">✨</div>
+                <div className="tab-content">
+                  <div className="tab-title">AI Generation</div>
+                  <div className="tab-description">Create subtitles from scratch</div>
                 </div>
-              )}
+              </button>
+              
+              <button
+                className={`feature-tab ${activeTab === 'correction' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('correction');
+                  setJobId(null);
+                }}
+              >
+                <div className="tab-icon">🔧</div>
+                <div className="tab-content">
+                  <div className="tab-title">Smart Correction</div>
+                  <div className="tab-description">Fix timing and quality issues</div>
+                </div>
+              </button>
             </div>
-          </section>
-        )}
+          </div>
+        </div>
+      </section>
 
-        {/* Workflow Panels */}
-        <div className="dashboard-panel">
-          {activeTab === 'correction' ? (
-            <section className="workflow-section">
-              <div className="workflow-card">
-                <h2 className="workflow-title">
-                  Subtitle-Audio Quality Check &amp; Correction
-                </h2>
-                <p className="workflow-description">
-                  Upload a video and its corresponding subtitle file to automatically detect and correct 
-                  synchronization issues, caption overlaps, and other quality problems.
-                </p>
+      <main className="main-content">
+        <div className="container">
+          {/* Job Progress Tracker */}
+          {jobId && (
+            <div className="progress-section">
+              <ProgressTracker
+                jobId={jobId}
+                onComplete={handleJobComplete}
+                onError={handleJobError}
+              />
+            </div>
+          )}
+
+          {/* File Manager */}
+          {showFileManager && (
+            <section className="file-manager-section">
+              <div className="section-card">
+                <div className="section-header">
+                  <h3 className="section-title">
+                    <span className="title-icon">📂</span>
+                    Your Subtitle Library
+                  </h3>
+                  <span className="file-count-badge">{subtitleFiles.length} files</span>
+                </div>
                 
-                <form className="upload-form" onSubmit={handleCorrectionSubmit}>
-                  <div className="file-upload-group">
-                    <label className="file-label">
-                      <span>Video File</span>
-                      <input
-                        type="file"
-                        name="video"
-                        accept={VIDEO_TYPES.join(',')}
-                        onChange={handleCorrectionUpload}
-                        required
-                        disabled={loading}
-                      />
-                      {correctionFiles.video && (
-                        <div className="file-info">
-                          <span className="file-name">{correctionFiles.video.name}</span>
-                          <span className="file-size">({formatFileSize(correctionFiles.video.size)})</span>
-                        </div>
-                      )}
-                    </label>
-                    
-                    <div className="subtitle-upload-container">
-                      <label className="file-label">
-                        <span className="upload-title">Subtitle File</span>
-                        <div className="supported-formats">
-                          Supported formats: SRT, VTT, ASS, SSA, SCC, SUB, SMI
-                        </div>
-                        <div className={`upload-zone ${correctionFiles.subtitle ? 'has-file' : ''}`}>
-                          <input
-                            type="file"
-                            name="subtitle"
-                            accept={SUBTITLE_EXTENSIONS}
-                            onChange={handleCorrectionUpload}
-                            required
-                            disabled={loading}
-                          />
-                          <div className="upload-placeholder">
-                            <i className="upload-icon">📄</i>
-                            <span>Drag & drop your subtitle file here or click to browse</span>
-                          </div>
-                        </div>
-                      </label>
-                      
-                      {correctionFiles.subtitle && (
-                        <div className="selected-file">
-                          <div className="file-preview">
-                            <i className="file-icon">📄</i>
+                {subtitleFiles.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-icon">📭</div>
+                    <h4>No files yet</h4>
+                    <p>Process some videos to see your subtitle files here</p>
+                  </div>
+                ) : (
+                  <div className="file-grid">
+                    {subtitleFiles.map((file) => (
+                      <div key={file.id} className="file-card">
+                        <div className="file-header">
+                          <div className="file-icon">📄</div>
+                          <div className="file-meta">
+                            <h4 className="file-name">{file.filename}</h4>
                             <div className="file-details">
-                              <span className="file-name">{correctionFiles.subtitle.name}</span>
-                              <span className="file-size">({formatFileSize(correctionFiles.subtitle.size)})</span>
+                              <span className="language-tag">{file.language}</span>
+                              <span className="file-size">{formatFileSize(file.size)}</span>
+                              <span className="file-date">{new Date(file.created_at).toLocaleDateString()}</span>
                             </div>
                           </div>
-                          <button 
-                            className="remove-file"
-                            onClick={() => setCorrectionFiles(prev => ({ ...prev, subtitle: null }))}
-                            type="button"
-                          >
-                            ✕
-                          </button>
                         </div>
-                      )}
-                    </div>
+                        
+                        <div className="file-actions">
+                          <button
+                            className="action-btn primary"
+                            onClick={() => handleDownloadFile(file.id, file.filename)}
+                          >
+                            <span>📥</span>
+                            Download
+                          </button>
+                          <select
+                            className="translate-select"
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleRequestTranslation(file.id, e.target.value);
+                                e.target.value = '';
+                              }
+                            }}
+                            disabled={translationRequests[file.id]}
+                          >
+                            <option value="">🌐 Translate...</option>
+                            {SUPPORTED_LANGUAGES
+                              .filter(lang => lang.code !== file.language)
+                              .map(lang => (
+                                <option key={lang.code} value={lang.code}>
+                                  {lang.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  
-                  <button
-                    className="action-btn"
-                    type="submit"
-                    disabled={loading || !correctionFiles.video || !correctionFiles.subtitle}
-                  >
-                    {loading ? 'Processing...' : 'Run Correction'}
-                  </button>
-                </form>
+                )}
               </div>
             </section>
-          ) : (
-            <section className="workflow-section">
-              <div className="workflow-card generation-card">
-                <h2 className="workflow-title">
-                  Subtitle Generation &amp; Translation
-                </h2>
-                <p className="workflow-description">
-                  Upload a video file to automatically generate subtitles in the specified language 
-                  using advanced AI speech recognition.
-                </p>
+          )}
+
+          {/* Workflow Sections */}
+          <section className="workflow-section">
+            {activeTab === 'generation' ? (
+              <div className="workflow-card generation-workflow">
+                <div className="workflow-header">
+                  <div className="workflow-icon">✨</div>
+                  <div className="workflow-info">
+                    <h3 className="workflow-title">AI Subtitle Generation</h3>
+                    <p className="workflow-description">
+                      Upload your video and let our AI create accurate subtitles in your chosen language
+                    </p>
+                  </div>
+                </div>
                 
                 <form className="upload-form" onSubmit={handleGenerationSubmit}>
-                  <div className="file-upload-group">
-                    <label className="file-label">
-                      <span>Video File</span>
+                  <div className="form-section">
+                    <h4 className="form-section-title">📹 Video Upload</h4>
+                    <div className="upload-area">
                       <input
                         type="file"
-                        name="video"
+                        id="generation-video"
                         accept={VIDEO_TYPES.join(',')}
                         onChange={handleGenerationUpload}
                         required
                         disabled={loading}
+                        className="file-input"
                       />
-                      {generationFile && (
-                        <div className="file-info">
-                          <span className="file-name">{generationFile.name}</span>
-                          <span className="file-size">({formatFileSize(generationFile.size)})</span>
-                        </div>
-                      )}
-                    </label>
-                    
-                    <label className="file-label">
-                      <span>Target Language</span>
-                      <select
-                        className="language-dropdown"
-                        value={generationLanguage}
-                        onChange={(e) => setGenerationLanguage(e.target.value)}
-                        disabled={loading}
-                      >
-                        {SUPPORTED_LANGUAGES.map((lang) => (
-                          <option key={lang.code} value={lang.code}>
-                            {lang.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                      <label htmlFor="generation-video" className="upload-label">
+                        {generationFile ? (
+                          <div className="file-selected">
+                            <div className="file-preview">
+                              <span className="file-icon">🎥</span>
+                              <div className="file-info">
+                                <span className="file-name">{generationFile.name}</span>
+                                <span className="file-size">({formatFileSize(generationFile.size)})</span>
+                              </div>
+                            </div>
+                            <button 
+                              type="button"
+                              className="remove-file"
+                              onClick={() => setGenerationFile(null)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="upload-placeholder">
+                            <div className="upload-icon">📤</div>
+                            <div className="upload-text">
+                              <strong>Choose your video file</strong>
+                              <span>or drag and drop it here</span>
+                            </div>
+                          </div>
+                        )}
+                      </label>
+                    </div>
                   </div>
                   
-                  <button
-                    className="action-btn generation-btn"
-                    type="submit"
-                    disabled={loading || !generationFile}
-                  >
-                    {loading ? 'Processing...' : 'Generate Subtitles'}
-                  </button>
+                  <div className="form-section">
+                    <h4 className="form-section-title">🌍 Language Selection</h4>
+                    <div className="language-grid">
+                      {SUPPORTED_LANGUAGES.map((lang) => (
+                        <label key={lang.code} className={`language-option ${generationLanguage === lang.code ? 'selected' : ''}`}>
+                          <input
+                            type="radio"
+                            name="language"
+                            value={lang.code}
+                            checked={generationLanguage === lang.code}
+                            onChange={(e) => setGenerationLanguage(e.target.value)}
+                            disabled={loading}
+                          />
+                          <span className="language-name">{lang.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="form-actions">
+                    <button
+                      className="submit-btn generation-btn"
+                      type="submit"
+                      disabled={loading || !generationFile}
+                    >
+                      {loading ? (
+                        <>
+                          <span className="loading-spinner"></span>
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <span>✨</span>
+                          Generate Subtitles
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </form>
               </div>
-            </section>
-          )}
+            ) : (
+              <div className="workflow-card correction-workflow">
+                <div className="workflow-header">
+                  <div className="workflow-icon">🔧</div>
+                  <div className="workflow-info">
+                    <h3 className="workflow-title">Smart Subtitle Correction</h3>
+                    <p className="workflow-description">
+                      Upload your video and subtitle files to automatically fix timing, overlaps, and quality issues
+                    </p>
+                  </div>
+                </div>
+                
+                <form className="upload-form" onSubmit={handleCorrectionSubmit}>
+                  <div className="upload-grid">
+                    <div className="form-section">
+                      <h4 className="form-section-title">📹 Video File</h4>
+                      <div className="upload-area">
+                        <input
+                          type="file"
+                          id="correction-video"
+                          accept={VIDEO_TYPES.join(',')}
+                          onChange={handleCorrectionUpload}
+                          name="video"
+                          required
+                          disabled={loading}
+                          className="file-input"
+                        />
+                        <label htmlFor="correction-video" className="upload-label">
+                          {correctionFiles.video ? (
+                            <div className="file-selected">
+                              <div className="file-preview">
+                                <span className="file-icon">🎥</span>
+                                <div className="file-info">
+                                  <span className="file-name">{correctionFiles.video.name}</span>
+                                  <span className="file-size">({formatFileSize(correctionFiles.video.size)})</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="upload-placeholder">
+                              <div className="upload-icon">📤</div>
+                              <div className="upload-text">
+                                <strong>Choose video file</strong>
+                              </div>
+                            </div>
+                          )}
+                        </label>
+                      </div>
+                    </div>
+                    
+                    <div className="form-section">
+                      <h4 className="form-section-title">📄 Subtitle File</h4>
+                      <div className="upload-area">
+                        <input
+                          type="file"
+                          id="correction-subtitle"
+                          accept={SUBTITLE_EXTENSIONS}
+                          onChange={handleCorrectionUpload}
+                          name="subtitle"
+                          required
+                          disabled={loading}
+                          className="file-input"
+                        />
+                        <label htmlFor="correction-subtitle" className="upload-label">
+                          {correctionFiles.subtitle ? (
+                            <div className="file-selected">
+                              <div className="file-preview">
+                                <span className="file-icon">📄</span>
+                                <div className="file-info">
+                                  <span className="file-name">{correctionFiles.subtitle.name}</span>
+                                  <span className="file-size">({formatFileSize(correctionFiles.subtitle.size)})</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="upload-placeholder">
+                              <div className="upload-icon">📤</div>
+                              <div className="upload-text">
+                                <strong>Choose subtitle file</strong>
+                                <span>SRT, VTT, ASS, SSA, SCC, SUB, SMI</span>
+                              </div>
+                            </div>
+                          )}
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="form-actions">
+                    <button
+                      className="submit-btn correction-btn"
+                      type="submit"
+                      disabled={loading || !correctionFiles.video || !correctionFiles.subtitle}
+                    >
+                      {loading ? (
+                        <>
+                          <span className="loading-spinner"></span>
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <span>🔧</span>
+                          Fix Subtitles
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </section>
         </div>
       </main>
 
       {/* Footer */}
       <footer className="dashboard-footer">
-        <div className="footer-content">
-          <span>
-            &copy; {new Date().getFullYear()} Subtitle Sync Platform &mdash; AI-Powered Video Solutions
-          </span>
+        <div className="container">
+          <div className="footer-content">
+            <p>&copy; {new Date().getFullYear()} SubtitleSync - Powered by AI</p>
+          </div>
         </div>
       </footer>
     </div>
