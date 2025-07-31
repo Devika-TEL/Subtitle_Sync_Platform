@@ -38,7 +38,7 @@ The platform consists of three main containers:
   - User authentication
 
 ### Backend Service (FastAPI)
-- **Port**: 8000 (accessible via proxy at https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/)
+- **Port**: 8000 (accessible via proxy at https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/)
 - **Framework**: FastAPI
 - **Features**:
   - RESTful API endpoints
@@ -80,9 +80,9 @@ The platform consists of three main containers:
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
 
-   The backend will be available at: https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/
+   The backend will be available at: https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/
 
-4. API documentation is available at: https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/docs
+4. API documentation is available at: https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/docs
 
 ### Frontend Setup
 
@@ -106,7 +106,7 @@ The platform consists of three main containers:
    npm start
    ```
 
-   The frontend will be available at: http://localhost:3000
+   The frontend will be available at: https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001/
 
 ### Database Setup
 
@@ -218,8 +218,8 @@ The FastAPI backend provides:
 
 Frontend (.env):
 ```
-REACT_APP_API_BASE_URL=https://vscode-internal-29910-beta.beta01.cloud.kavia.ai/proxy/8000/
-REACT_APP_SITE_URL=https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000
+REACT_APP_API_BASE_URL=https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/
+REACT_APP_SITE_URL=https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001/
 ```
 
 ## Deployment

@@ -68,11 +68,15 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3002",
+        # Current frontend URL
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001",
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai",
+        # Legacy URLs for backward compatibility
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai",
-        # Legacy URLs for backward compatibility
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",
