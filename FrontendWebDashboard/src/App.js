@@ -405,23 +405,47 @@ const Dashboard = () => {
                       )}
                     </label>
                     
-                    <label className="file-label">
-                      <span>Subtitle File (.srt, .vtt, .ass, etc.)</span>
-                      <input
-                        type="file"
-                        name="subtitle"
-                        accept=".srt,.vtt,.ass,.ssa,.sbv"
-                        onChange={handleCorrectionUpload}
-                        required
-                        disabled={loading}
-                      />
+                    <div className="subtitle-upload-container">
+                      <label className="file-label">
+                        <span className="upload-title">Subtitle File</span>
+                        <div className="supported-formats">
+                          Supported formats: SRT, VTT, ASS, SSA, SCC, SUB, SMI
+                        </div>
+                        <div className={`upload-zone ${correctionFiles.subtitle ? 'has-file' : ''}`}>
+                          <input
+                            type="file"
+                            name="subtitle"
+                            accept={SUBTITLE_EXTENSIONS}
+                            onChange={handleCorrectionUpload}
+                            required
+                            disabled={loading}
+                          />
+                          <div className="upload-placeholder">
+                            <i className="upload-icon">📄</i>
+                            <span>Drag & drop your subtitle file here or click to browse</span>
+                          </div>
+                        </div>
+                      </label>
+                      
                       {correctionFiles.subtitle && (
-                        <div className="file-info">
-                          <span className="file-name">{correctionFiles.subtitle.name}</span>
-                          <span className="file-size">({formatFileSize(correctionFiles.subtitle.size)})</span>
+                        <div className="selected-file">
+                          <div className="file-preview">
+                            <i className="file-icon">📄</i>
+                            <div className="file-details">
+                              <span className="file-name">{correctionFiles.subtitle.name}</span>
+                              <span className="file-size">({formatFileSize(correctionFiles.subtitle.size)})</span>
+                            </div>
+                          </div>
+                          <button 
+                            className="remove-file"
+                            onClick={() => setCorrectionFiles(prev => ({ ...prev, subtitle: null }))}
+                            type="button"
+                          >
+                            ✕
+                          </button>
                         </div>
                       )}
-                    </label>
+                    </div>
                   </div>
                   
                   <button

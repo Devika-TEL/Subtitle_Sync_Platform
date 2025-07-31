@@ -85,9 +85,18 @@ export const VIDEO_TYPES = [
 
 // Supported subtitle formats
 export const SUBTITLE_TYPES = [
-  'text/plain', // .srt files often come as text/plain
+  'text/plain', // .srt, .sub files often come as text/plain
   'application/x-subrip', // .srt
   'text/vtt', // .vtt
   'application/x-ass', // .ass
-  'text/x-ssa' // .ssa
+  'text/x-ssa', // .ssa
+  'text/x-scc', // .scc
+  'application/x-sub', // .sub
+  'application/x-microdvd', // .sub
+  'application/x-subviewer', // .sub
+  'application/x-mpsub', // .sub
+  'application/x-sami' // .smi, .sami
 ];
+
+// Supported subtitle file extensions (for accept attribute)
+export const SUBTITLE_EXTENSIONS = '.srt,.vtt,.ass,.ssa,.scc,.sub,.smi,.sami';
