@@ -1,35 +1,17 @@
-"""
-Initializer/CLI for SQLite database using the models defined for Subtitle Sync Platform.
-Run this script to create (or upgrade) the database schema in the SQLite file.
-"""
+import sqlite3
 
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from models import Base
-
-DB_FILE = os.getenv("DB_FILE", "subtitle_sync_platform.db")
-DATABASE_URL = f"sqlite:///{DB_FILE}"
-
-# PUBLIC_INTERFACE
-def get_engine():
-    """Return SQLAlchemy Engine instance."""
-    return create_engine(DATABASE_URL, echo=True, future=True)
-
-# PUBLIC_INTERFACE
-def create_db():
-    """Create all tables per models.py if not present."""
-    engine = get_engine()
-    Base.metadata.create_all(engine)
-    print("Database schema created or verified.")
-
-# PUBLIC_INTERFACE
-def drop_db():
-    """Drop all tables (DANGER: destructive)."""
-    engine = get_engine()
-    Base.metadata.drop_all(engine)
-    print("Database schema dropped.")
+def init_db():
+    """
+    Initializes the subtitle_sync_platform.db database using schema.sql.
+    """
+    conn = sqlite3.connect('subtitle_sync_platform.db')
+    cursor = conn.cursor()
+    with open("schema.sql", "r") as f:
+        sql_script = f.read()
+    cursor.executescript(sql_script)
+    conn.commit()
+    conn.close()
 
 if __name__ == "__main__":
-    print("[DB INIT] Creating database/tables...")
-    create_db()
+    init_db()
+    print("Database initialized successfully.")

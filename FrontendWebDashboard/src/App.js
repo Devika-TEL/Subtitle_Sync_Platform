@@ -1,13 +1,12 @@
 import React, { useRef, useState } from "react";
 import "./App.css";
 
-// PUBLIC_INTERFACE
+/**
+ * PUBLIC_INTERFACE
+ * Root application component for the Subtitle Sync Dashboard.
+ * Provides UI for uploading videos/subtitles, monitoring progress, and accessing downloads.
+ */
 function App() {
-  /**
-   * Root application component for the Subtitle Sync Dashboard.
-   * Provides UI for uploading videos/subtitles, monitoring progress, and accessing downloads.
-   */
-
   const videoInputRef = useRef(null);
   const subtitleInputRef = useRef(null);
 
