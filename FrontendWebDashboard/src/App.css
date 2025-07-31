@@ -1,97 +1,174 @@
-.dashboard-container {
-  max-width: 600px;
-  margin: 60px auto;
-  background: #f5f8fe;
-  box-shadow: 0 4px 24px 0 rgba(34, 43, 72, 0.08);
-  border-radius: 18px;
-  padding: 40px 36px 32px 36px;
+.dashboard-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--dashboard-bg, #f5f8fa);
+  font-family: "Segoe UI", "Roboto", "Arial", sans-serif;
+  color: #222;
 }
 
-header {
+.dashboard-header {
+  padding: 1.5rem 2rem 1rem 2rem;
+  background: #2a4378;
+  color: #fff;
+  box-shadow: 0 2px 8px 0 #00529220;
   text-align: center;
-  margin-bottom: 34px;
 }
-
-header h1 {
+.dashboard-header h1 {
+  margin: 0.2em 0 0.1em 0;
   font-size: 2.3rem;
-  color: #23356b;
-  margin-bottom: 12px;
+  letter-spacing: 1px;
   font-weight: 700;
 }
+.dashboard-header h2 {
+  margin: 0 0 0.5em 0;
+  font-size: 1.05rem;
+  font-weight: 400;
+  color: #d5e3f4;
+  letter-spacing: 0.2px;
+}
 
-header p {
-  color: #4562ad;
+.dashboard-main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  margin-top: 2.5rem;
 }
 
 .upload-form {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  background: #ffffff;
+  background: #fff;
   border-radius: 12px;
-  padding: 22px 24px;
-  margin-bottom: 30px;
-  box-shadow: 0px 2px 8px 0 rgba(24, 38, 54, 0.06);
-}
-
-.form-group {
+  box-shadow: 0 2px 16px 0 #2a437814;
+  padding: 2rem 2.5rem 1.5rem 2.5rem;
+  width: 360px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
+  gap: 1.7rem;
+  max-width: 97vw;
 }
-
-.form-group label {
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.upload-form label {
+  font-size: 1.05em;
+  color: #28416f;
   font-weight: 500;
-  color: #23356b;
+}
+.upload-form input[type="file"] {
+  margin-top: 0.45em;
+  font-family: inherit;
 }
 
-input[type="file"] {
-  border: 1px solid #e1e7f0;
-  border-radius: 5px;
-  padding: 7px;
-  width: 100%;
-  background: #fafbfc;
-  color: #12193a;
-  cursor: pointer;
-}
-
-.upload-btn {
-  background: #3d6be0;
-  color: white;
-  font-weight: 600;
+.submit-btn,
+.reset-btn {
+  background: #2a4378;
+  color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 12px 0;
-  margin-top: 12px;
+  border-radius: 6px;
+  padding: 0.7em 1.2em;
+  font-size: 1.09em;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
-  font-size: 1.1rem;
+  transition: background 0.15s;
+}
+.submit-btn:disabled {
+  background: #a5b5d1;
+  cursor: not-allowed;
+}
+.submit-btn:not(:disabled):hover,
+.reset-btn:hover {
+  background: #183666;
 }
 
-.upload-btn:hover {
-  background: #2251bb;
+.error-message {
+  color: #c72600;
+  font-size: 1.01em;
+  margin-top: 0.6em;
+  text-align: center;
 }
 
-.dashboard-description {
-  background: #e4eafb;
-  border-radius: 10px;
-  padding: 18px 22px;
-  color: #23356b;
-  font-size: 1.09rem;
+.job-status-section {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 16px 0 #2a437814;
+  padding: 2rem 2.5rem 2.5rem 2.5rem;
+  width: 370px;
+  max-width: 97vw;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  align-items: left;
+}
+.status-processing {
+  color: #38638c;
+}
+.status-completed {
+  color: #28794e;
+  font-weight: 600;
+}
+.status-error {
+  color: #c72600;
+  font-weight: 600;
+}
+.job-loading,
+.job-progress-message {
+  color: #38638c;
+  margin-top: 0.7em;
+  font-size: 1.08em;
+}
+.polling-indicator {
+  font-size: 1.15em;
+  vertical-align: middle;
+}
+.downloads-block {
+  margin-top: 1.4em;
+  font-size: 1.08em;
+}
+.download-link {
+  color: #2a4378;
+  font-weight: 600;
+  font-size: 1.08em;
+  text-decoration: underline;
+  margin-right: 0.5em;
+}
+.download-link:active,
+.download-link:focus,
+.download-link:hover {
+  color: #173359;
+}
+.downloads-block ul {
+  padding-left: 1.5em;
+  margin: 0.45em 0 1.2em 0;
+}
+.downloads-block li {
+  margin-bottom: 0.4em;
 }
 
-.dashboard-description ul {
-  margin: 0px 0px 0px 23px;
-  padding: 0;
+.dashboard-footer {
+  background: #e9eef3;
+  color: #205185;
+  padding: 1.1rem 0.7rem 1rem 0.7rem;
+  margin-top: 2.3em;
+  font-size: 1.01em;
+  text-align: center;
+  border-top: 1px solid #c7d8ea4a;
 }
 
-@media (max-width: 700px) {
-  .dashboard-container {
-    max-width: 97vw;
-    padding: 22px 4vw 18px 4vw;
-  }
+@media (max-width: 540px) {
+  .dashboard-main,
+  .job-status-section,
   .upload-form {
-    padding: 10px 5vw;
+    margin-top: 1.3rem;
+    padding: 1.1rem 0.6rem 1.4rem 0.6rem;
+    width: 98vw;
+  }
+  .dashboard-header h1 {
+    font-size: 1.43rem;
+  }
+  .dashboard-header h2 {
+    font-size: 0.97rem;
   }
 }
