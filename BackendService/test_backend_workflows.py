@@ -50,7 +50,12 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hello!
 
 def test_subtitle_correction_and_download(client, tmp_job_dir):
     """
-    End-to-end: Submit subtitle file for correction, poll job status, trigger result download.
+    End-to-end workflow: Simulates a frontend user submitting a subtitle correction job via API,
+    polling /jobs/{job_id}/status for job completion, and then downloading the resulting file using
+    the provided download link. Validates that the file is successfully downloaded, not 404, and that
+    content matches the expected subtitle output.
+
+    This mirrors frontend user behavior for the "correction" workflow.
     """
     # Step 1: Upload subtitle file with .srt extension
     resp = client.post(
@@ -92,7 +97,11 @@ def test_subtitle_correction_and_download(client, tmp_job_dir):
 
 def test_generation_workflow_and_download(client, tmp_job_dir):
     """
-    End-to-end: Simulate subtitle generation (really just uploads another format).
+    End-to-end workflow: Simulates a frontend user submitting a subtitle generation job (using VTT/ASS input)
+    via API, polling the status endpoint for job completion, and then downloading the resulting file via the
+    download link. Ensures that the download process returns a valid file and correct content (not a 404).
+
+    This test fully simulates the frontend user behavior for both "generation" and "multi-format" workflows.
     """
     for fmt in [".vtt", ".ass"]:
         resp = client.post(
