@@ -10,14 +10,29 @@ from datetime import datetime
 
 # --- ORM & Database Imports ---
 import sys
-sys.path.append(
-    str(Path(__file__).resolve().parent.parent / "Database")
-)
+
+# Dynamically find the Database directory (for local/dev or prod reliably)
+DATABASE_PATH = str((Path(__file__).resolve().parent.parent / "Database"))
+if DATABASE_PATH not in sys.path:
+    sys.path.insert(0, DATABASE_PATH)
+
+try:
+    import models as models
+    import init_db as db_init
+except ModuleNotFoundError:
+    # Fallback: try relative imports for certain deployment/packaging structures
+    try:
+        from Database import models as models
+        from Database import init_db as db_init
+    except ModuleNotFoundError:
+        raise ImportError(
+            "Unable to import 'models' and 'init_db' from 'Database'. "
+            "Check that Subtitle_Sync_Platform/Database/ is present and Python path is correctly set. "
+            "This is needed so FastAPI backend can use database models."
+        )
+
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
-
-import Database.models as models
-import Database.init_db as db_init
 
 # Initialize SQLAlchemy engine and session
 engine = db_init.get_engine()
