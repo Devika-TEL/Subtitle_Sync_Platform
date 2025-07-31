@@ -1,10 +1,33 @@
 import os
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from uuid import uuid4
 from pathlib import Path
+
+# --- ORM & Database Imports ---
+import sys
+sys.path.append(
+    str(Path(__file__).resolve().parent.parent / "Database")
+)
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
+
+import Database.models as models
+import Database.init_db as db_init
+
+# Initialize SQLAlchemy engine and session
+engine = db_init.get_engine()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    """Yield a database session for dependency injection (one per request)."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 app = FastAPI(
     title="Subtitle Sync Platform Backend",
@@ -15,6 +38,11 @@ app = FastAPI(
         {"name": "Generation", "description": "Subtitle and subtitle translation generation endpoints"},
     ],
 )
+
+# Automatically initialize DB on startup if needed
+@app.on_event("startup")
+def startup_event():
+    db_init.create_db()
 
 # Enable CORS for local and production frontend
 app.add_middleware(
