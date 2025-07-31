@@ -139,14 +139,59 @@
   100% { transform: rotate(360deg);}
 }
 
+/* --- Prominent CTA Download Button Styles --- */
+.cta-download-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(90deg, #005f99 0%, #11b57b 100%);
+  color: #fff !important;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.2rem;
+  font-weight: bold;
+  padding: 1.15em 2.3em;
+  margin: 1.2em 0 0.6em 0;
+  text-decoration: none;
+  box-shadow: 0 4px 16px rgba(30,60,150,0.09);
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+  outline: none;
+}
+.cta-download-btn:focus, .cta-download-btn:active {
+  background: linear-gradient(90deg, #0077cc 0%, #17cc95 100%);
+  box-shadow: 0 0 0 4px rgba(25,154,211,0.22);
+  transform: scale(1.03);
+}
+.cta-download-btn:hover {
+  background: linear-gradient(90deg, #006597 0%, #15af80 100%);
+  text-decoration: underline;
+  transform: scale(1.01);
+}
+.cta-download-text {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 1.18em;
+}
 
 .download-result-area {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 1.2rem;
   margin-top: 0.2rem;
 }
+
+.cta-support-text {
+  margin-top: 0.6em;
+  color: #145671;
+  font-size: 1em;
+  font-weight: 500;
+  letter-spacing: 0.01rem;
+  text-align: center;
+}
+
+/* legacy download-btn and download-note remain, for fallback or future elements */
 .download-btn {
   background-color: #2a5bff;
   color: #fff;
@@ -163,14 +208,12 @@
   transition: background 0.15s;
   outline: none;
 }
-
 .download-btn:hover,
 .download-btn:focus {
   background-color: #1945b9;
   text-decoration: none;
   color: #fff;
 }
-
 .download-note {
   font-size: 0.98rem;
   color: #0c3f68;

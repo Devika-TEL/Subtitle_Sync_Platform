@@ -46,6 +46,9 @@ function App() {
     }, 1800);
   };
 
+  // Call-to-action supportive and accessible text
+  const downloadSupportText = "Your file is ready! Click the button above to download your processed subtitles.";
+
   return (
     <div className="dashboard-root">
       <header className="dashboard-header">
@@ -120,22 +123,27 @@ function App() {
         </section>
 
         {/* Download section with prominent button */}
-        <section className="download-section">
+        <section className="download-section" aria-live="polite">
           <h2>Download Processed Subtitles</h2>
           {(jobComplete && downloadUrl) ? (
-            <div className="download-result-area">
+            <div className="download-result-area" role="region" aria-label="Download Processed Subtitle">
               <a
                 href={downloadUrl}
                 download
-                className="download-btn"
-                aria-label="Download processed subtitle file"
+                className="cta-download-btn"
+                role="button"
+                aria-label="Download your processed subtitle file"
+                tabIndex={0}
+                autoFocus
               >
-                <svg width="20" height="20" style={{verticalAlign:"middle",marginRight:"0.5rem"}} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 5v14m0 0l-5-5m5 5l5-5"></path></svg>
-                Download Your Processed Subtitle File
+                <span className="cta-download-text">
+                  <svg width="22" height="22" style={{verticalAlign:"middle",marginRight:"0.55em", marginTop:"-2px"}} fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24"><path d="M12 5v13m0 0l-5-5m5 5l5-5"></path></svg>
+                  Download Subtitle File
+                </span>
               </a>
-              <span className="download-note">
-                Your corrected subtitle file is ready. Click to download.
-              </span>
+              <div className="cta-support-text" id="cta-support">
+                {downloadSupportText}
+              </div>
             </div>
           ) : (
             <div className="download-placeholder">
