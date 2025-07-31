@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import './App.css';
 
 // Components
 import Notification from './components/Notification';
 import ProgressTracker from './components/ProgressTracker';
+import Register from './components/Register/Register';
 
 // Services
 import { 
@@ -507,8 +508,31 @@ const Dashboard = () => {
   );
 };
 
-// Auth Components (simplified for now)
-const LoginForm = ({ onLogin }) => {
+// Wrapper components to use navigation hooks
+const LoginWrapper = ({ onLogin }) => {
+  const navigate = useNavigate();
+  
+  return (
+    <LoginForm 
+      onLogin={onLogin}
+      onSwitchToRegister={() => navigate('/register')}
+    />
+  );
+};
+
+const RegisterWrapper = ({ onRegisterSuccess }) => {
+  const navigate = useNavigate();
+  
+  return (
+    <Register 
+      onRegisterSuccess={onRegisterSuccess}
+      onSwitchToLogin={() => navigate('/login')}
+    />
+  );
+};
+
+// Auth Components
+const LoginForm = ({ onLogin, onSwitchToRegister }) => {
   const [credentials, setCredentials] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -551,6 +575,19 @@ const LoginForm = ({ onLogin }) => {
         <button type="submit" disabled={loading}>
           {loading ? 'Logging in...' : 'Login'}
         </button>
+        <div className="auth-footer">
+          <p>
+            Don't have an account?{' '}
+            <button
+              type="button"
+              className="link-button"
+              onClick={onSwitchToRegister}
+              disabled={loading}
+            >
+              Sign Up
+            </button>
+          </p>
+        </div>
       </form>
     </div>
   );
@@ -575,7 +612,10 @@ const App = () => {
     setUser(userData);
   };
 
-
+  const handleRegisterSuccess = (userData) => {
+    // Auto-login after successful registration
+    setUser(userData);
+  };
 
   if (loading) {
     return <div className="loading-spinner">Loading...</div>;
@@ -594,7 +634,17 @@ const App = () => {
           <Route 
             path="/login" 
             element={
-              user ? <Navigate to="/" replace /> : <LoginForm onLogin={handleLogin} />
+              user ? <Navigate to="/" replace /> : (
+                <LoginWrapper onLogin={handleLogin} />
+              )
+            } 
+          />
+          <Route 
+            path="/register" 
+            element={
+              user ? <Navigate to="/" replace /> : (
+                <RegisterWrapper onRegisterSuccess={handleRegisterSuccess} />
+              )
             } 
           />
           <Route path="*" element={<Navigate to="/" replace />} />
