@@ -17,19 +17,20 @@ Edit `.env` (or copy from `.env.example`):
 
 ```
 REACT_APP_API_BASE_URL=https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/
+REACT_APP_SITE_URL=https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001/
 ```
 - All API requests from the dashboard will use this endpoint by default.
 - If your backend runs elsewhere or in production, set the correct API base URL.
 
-### 3. Start the frontend dev server (runs on port 3000):
+### 3. Start the frontend dev server (runs on port 3001):
 
 ```bash
 npm start
 ```
 
-The preview version of the frontend app is accessed at:
+- The frontend app is accessed at:
 ```
-https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3000/preview.html
+https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001/
 ```
 
 ### 4. Start the backend API server (if developing locally):
@@ -42,8 +43,8 @@ uvicorn main:app --reload --port 8000
 
 ### Troubleshooting
 
-- **CORS errors**: The backend is configured for CORS to accept requests from `http://localhost:3000` and proxy requests.
-- **Connection errors**: Ensure both backend and frontend are running, check ports and the value of `REACT_APP_API_BASE_URL`.
+- **CORS errors**: The backend is configured for CORS to accept requests from `https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001/` and proxy requests.
+- **Connection errors**: Ensure both backend and frontend are running, check the value of `REACT_APP_API_BASE_URL`.
 - Visit `https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/` in your browser to check backend status.
 
 If following these steps does not resolve the issue, check your browser's console network tab for CORS errors or request failures for further debugging.
