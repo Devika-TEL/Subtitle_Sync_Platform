@@ -66,7 +66,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000"
+        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000"
     ],
     allow_credentials=True,
     allow_methods=["*"],

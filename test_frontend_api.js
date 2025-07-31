@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Test configuration
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:3001';
 const TEST_SRT_CONTENT = `1
 00:00:01,000 --> 00:00:05,000
 This is a test subtitle for frontend connectivity.

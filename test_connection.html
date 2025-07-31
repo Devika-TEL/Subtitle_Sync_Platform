@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend-Backend Connection Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test-result { margin: 10px 0; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Frontend-Backend Connection Test</h1>
+    <p>This test verifies that the frontend can connect to the backend API.</p>
+    
+    <button onclick="testHealthCheck()">Test Health Check</button>
+    <button onclick="testCorsConfig()">Test CORS Configuration</button>
+    <button onclick="testProcessEndpoint()">Test Process Endpoint (OPTIONS)</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:3001';
+        const resultsDiv = document.getElementById('results');
+
+        function addResult(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.innerHTML = `${new Date().toLocaleTimeString()}: ${message}`;
+            resultsDiv.appendChild(div);
+        }
+
+        async function testHealthCheck() {
+            addResult('Testing backend health check...', 'info');
+            try {
+                const response = await fetch(`${API_BASE_URL}/`);
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`✅ Health check successful: ${data.message}`, 'success');
+                } else {
+                    addResult(`❌ Health check failed: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ Health check error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testCorsConfig() {
+            addResult('Testing CORS configuration...', 'info');
+            try {
+                // Test a simple GET request first
+                const response = await fetch(`${API_BASE_URL}/`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    addResult(`✅ CORS working: GET request successful`, 'success');
+                    
+                    // Test OPTIONS request for CORS preflight
+                    const optionsResponse = await fetch(`${API_BASE_URL}/process`, {
+                        method: 'OPTIONS',
+                        headers: {
+                            'Origin': window.location.origin,
+                            'Access-Control-Request-Method': 'POST',
+                            'Access-Control-Request-Headers': 'content-type'
+                        }
+                    });
+                    
+                    if (optionsResponse.ok) {
+                        addResult(`✅ CORS preflight successful`, 'success');
+                    } else {
+                        addResult(`⚠️ CORS preflight failed: ${optionsResponse.status}`, 'error');
+                    }
+                } else {
+                    addResult(`❌ CORS test failed: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ CORS test error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testProcessEndpoint() {
+            addResult('Testing /process endpoint OPTIONS...', 'info');
+            try {
+                const response = await fetch(`${API_BASE_URL}/process`, {
+                    method: 'OPTIONS'
+                });
+                
+                if (response.ok) {
+                    addResult(`✅ Process endpoint OPTIONS successful`, 'success');
+                } else {
+                    addResult(`❌ Process endpoint OPTIONS failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ Process endpoint error: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-run tests when page loads
+        window.addEventListener('load', () => {
+            addResult('Page loaded. Environment variables:', 'info');
+            addResult(`API Base URL: ${API_BASE_URL}`, 'info');
+            addResult(`Current origin: ${window.location.origin}`, 'info');
+        });
+    </script>
+</body>
+</html>
