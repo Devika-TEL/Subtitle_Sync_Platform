@@ -1,186 +1,294 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import "./App.css";
 
-// Language options for generation workflow
-const LANGUAGES = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  { code: "fr", label: "French" },
-  // Add more as needed
+// Example color palette: Adapt as needed to match extracted branding
+const COLORS = {
+  primary: "#4638E0",
+  accent: "#FF9B4B",
+  secondary: "#EFEFFA",
+  success: "#5FC979",
+  error: "#DF3549",
+  background: "#F6F7FC",
+  card: "#FFFFFF",
+  lightText: "#7C81A1",
+  darkText: "#23234B",
+  border: "#E1E3ED"
+};
+
+const SUPPORTED_LANGUAGES = [
+  { code: "en", name: "English" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "de", name: "German" },
+  { code: "zh", name: "Chinese" },
 ];
 
-// PUBLIC_INTERFACE
 function App() {
-  // App-level UI state
-  const [workflow, setWorkflow] = useState("correction"); // 'correction' or 'generation'
-  const [videoFile, setVideoFile] = useState(null);
-  const [subtitleFile, setSubtitleFile] = useState(null);
-  const [targetLang, setTargetLang] = useState(LANGUAGES[0].code);
-  const [status, setStatus] = useState("");
-  const [resultReady, setResultReady] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [workflow, setWorkflow] = useState("correction");
+  const [correctionFiles, setCorrectionFiles] = useState({ video: null, subtitle: null });
+  const [generationFile, setGenerationFile] = useState(null);
+  const [generationLang, setGenerationLang] = useState("en");
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  const videoInputRef = useRef();
-  const subtitleInputRef = useRef();
-
-  // Simulated backend call
-  const handleProcess = () => {
-    setStatus("Processing. This may take a while...");
-    setTimeout(() => {
-      setStatus("Success! Your subtitles are ready.");
-      setResultReady(true);
-    }, 2000);
+  // Event handlers for each workflow
+  const handleCorrectionUpload = (e) => {
+    const { name, files } = e.target;
+    setCorrectionFiles((prev) => ({ ...prev, [name]: files[0] }));
   };
 
-  // Handle combined upload panel logic
-  const handleUpload = (e, isVideo = false) => {
-    if (isVideo) {
-      setVideoFile(e.target.files[0]);
+  const handleGenerationUpload = (e) => {
+    setGenerationFile(e.target.files[0]);
+  };
+
+  // Language selector for generation
+  const handleLanguageChange = (e) => {
+    setGenerationLang(e.target.value);
+  };
+
+  // Submission Handler
+  const handleCorrectionSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    // TODO: Connect to API endpoint for correction workflow
+    setTimeout(() => {
+      setLoading(false);
+      setResult({
+        url: "#",
+        filename: "Corrected_Subtitle.srt",
+        message: "The subtitle file has been auto-corrected and is ready to download!"
+      });
+    }, 1600);
+  };
+
+  const handleGenerationSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    // TODO: Connect to API endpoint for generation workflow
+    setTimeout(() => {
+      setLoading(false);
+      setResult({
+        url: "#",
+        filename: `Generated_${generationLang.toUpperCase()}.srt`,
+        message: `Subtitle generated in ${SUPPORTED_LANGUAGES.find(l => l.code === generationLang).name}.`
+      });
+    }, 1600);
+  };
+
+  // Download button
+  const handleDownload = () => {
+    if (result && result.url !== "#") {
+      window.open(result.url, "_blank");
     } else {
-      setSubtitleFile(e.target.files[0]);
+      alert("Download endpoint is not set up yet.");
     }
   };
 
-  const handleDownload = () => {
-    setDownloading(true);
-    setTimeout(() => {
-      // Simulate trigger download
-      setDownloading(false);
-      setStatus("Downloaded successfully.");
-      setResultReady(false);
-    }, 1200);
-  };
-
-  // Reset all logic when workflow changes
-  const switchWorkflow = (type) => {
-    setWorkflow(type);
-    setVideoFile(null);
-    setSubtitleFile(null);
-    setStatus("");
-    setResultReady(false);
-    setTargetLang(LANGUAGES[0].code);
-    if (videoInputRef.current) videoInputRef.current.value = "";
-    if (subtitleInputRef.current) subtitleInputRef.current.value = "";
-  };
-
-  // Branded header
-  const BrandHeader = () => (
-    <header className="app-header">
-      <span className="brand-icon" role="img" aria-label="subtitle-sync">
-        🎬
-      </span>
-      <span className="brand-title">Subtitle Sync Platform</span>
-    </header>
-  );
-
-  // Workflow selection tabs/cards
-  const WorkflowTabs = () => (
-    <nav className="workflow-tabs">
-      <button
-        className={`workflow-tab${workflow === "correction" ? " active" : ""}`}
-        onClick={() => switchWorkflow("correction")}
-        aria-pressed={workflow === "correction"}
-      >
-        Subtitle Correction
-      </button>
-      <button
-        className={`workflow-tab${workflow === "generation" ? " active" : ""}`}
-        onClick={() => switchWorkflow("generation")}
-        aria-pressed={workflow === "generation"}
-      >
-        Subtitle Generation
-      </button>
-    </nav>
-  );
-
-  // Upload/Input panel for each workflow
-  const UploadPanel = () => (
-    <section className="upload-card">
-      <label className="upload-label">
-        <span>Video File</span>
-        <input
-          type="file"
-          accept="video/*"
-          ref={videoInputRef}
-          onChange={(e) => handleUpload(e, true)}
-        />
-        {videoFile && (
-          <span className="upload-filename">{videoFile.name}</span>
-        )}
-      </label>
-      {workflow === "correction" && (
-        <label className="upload-label">
-          <span>Subtitle File</span>
-          <input
-            type="file"
-            accept=".srt,.vtt,.ass,.ssa"
-            ref={subtitleInputRef}
-            onChange={handleUpload}
-          />
-          {subtitleFile && (
-            <span className="upload-filename">{subtitleFile.name}</span>
-          )}
-        </label>
-      )}
-      {workflow === "generation" && (
-        <label className="upload-label">
-          <span>Target Language</span>
-          <select
-            className="lang-select"
-            value={targetLang}
-            onChange={(e) => setTargetLang(e.target.value)}
-          >
-            {LANGUAGES.map((lang) => (
-              <option key={lang.code} value={lang.code}>
-                {lang.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <button
-        className="primary-btn"
-        disabled={
-          !videoFile ||
-          (workflow === "correction" && !subtitleFile) ||
-          status.startsWith("Processing")
-        }
-        onClick={handleProcess}
-      >
-        {workflow === "correction" ? "Validate & Correct" : "Generate Subtitles"}
-      </button>
-    </section>
-  );
-
-  // Status/Result panel
-  const StatusCard = () =>
-    status ? (
-      <section className="status-card" aria-live="polite">
-        <p className="status-msg">{status}</p>
-        {resultReady && (
-          <button
-            className="download-btn"
-            onClick={handleDownload}
-            disabled={downloading}
-            aria-disabled={downloading}
-          >
-            {downloading ? "Downloading..." : "Download Result"}
-          </button>
-        )}
-      </section>
-    ) : null;
-
-  // Main dashboard render
+  // Render forms for workflows
   return (
-    <div className="dashboard-bg">
-      <BrandHeader />
-      <main className="dashboard-main">
-        <WorkflowTabs />
-        <UploadPanel />
-        <StatusCard />
+    <div className="dashboard-bg" style={{ background: COLORS.background, minHeight: "100vh" }}>
+      {/* Header */}
+      <header className="dashboard-header" style={{ background: COLORS.primary, color: "#FFF" }}>
+        <div className="header-content">
+          <img
+            src="https://svgshare.com/i/148G.svg"
+            alt="Subtitle Sync Platform"
+            className="dashboard-logo"
+            style={{ height: 34, marginRight: 15 }}
+          />
+          <div className="header-titles">
+            <h1 className="main-title" style={{ color: "#FFF" }}>
+              Subtitle Sync Platform
+            </h1>
+            <span className="subtitle" style={{ color: COLORS.accent }}>
+              Streamlined AI-Powered Subtitle Correction & Generation
+            </span>
+          </div>
+        </div>
+      </header>
+      {/* Navigation Tabs */}
+      <nav className="workflow-nav">
+        <div className="workflow-tabs" role="tablist">
+          <button
+            className={`workflow-tab${workflow === "correction" ? " active" : ""}`}
+            style={{
+              background: workflow === "correction" ? COLORS.primary : COLORS.secondary,
+              color: workflow === "correction" ? "#FFF" : COLORS.primary,
+              borderColor: workflow === "correction" ? COLORS.primary : COLORS.secondary
+            }}
+            onClick={() => {
+              setWorkflow("correction");
+              setResult(null);
+            }}
+            role="tab"
+            aria-selected={workflow === "correction"}
+          >
+            <span style={{ fontWeight: 600 }}>
+              Correction
+            </span>
+          </button>
+          <button
+            className={`workflow-tab${workflow === "generation" ? " active" : ""}`}
+            style={{
+              background: workflow === "generation" ? COLORS.accent : COLORS.secondary,
+              color: workflow === "generation" ? "#FFF" : COLORS.primary,
+              borderColor: workflow === "generation" ? COLORS.accent : COLORS.secondary
+            }}
+            onClick={() => {
+              setWorkflow("generation");
+              setResult(null);
+            }}
+            role="tab"
+            aria-selected={workflow === "generation"}
+          >
+            <span style={{ fontWeight: 600 }}>
+              Generation
+            </span>
+          </button>
+        </div>
+      </nav>
+      {/* Workflow Panels */}
+      <main className="dashboard-content">
+        <div className="dashboard-panel" aria-labelledby={workflow + "-tab"}>
+          {workflow === "correction" ? (
+            <section className="workflow-section">
+              <div className="workflow-card">
+                <h2 className="workflow-title" style={{ color: COLORS.primary }}>
+                  Subtitle-Audio Quality Check & Correction
+                </h2>
+                <form className="upload-form" onSubmit={handleCorrectionSubmit}>
+                  <label className="file-label" style={{ color: COLORS.darkText }}>
+                    <span>Video File</span>
+                    <input
+                      type="file"
+                      name="video"
+                      accept="video/*"
+                      onChange={handleCorrectionUpload}
+                      required
+                    />
+                  </label>
+                  <label className="file-label" style={{ color: COLORS.darkText }}>
+                    <span>Subtitle File (.srt, .vtt, etc.)</span>
+                    <input
+                      type="file"
+                      name="subtitle"
+                      accept=".srt,.vtt,.ass,.sbv"
+                      onChange={handleCorrectionUpload}
+                      required
+                    />
+                  </label>
+                  <button
+                    className="action-btn"
+                    style={{
+                      background: COLORS.primary,
+                      color: "#FFF",
+                      marginTop: 20
+                    }}
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? "Processing..." : "Run Correction"}
+                  </button>
+                </form>
+              </div>
+            </section>
+          ) : (
+            <section className="workflow-section">
+              <div className="workflow-card">
+                <h2 className="workflow-title" style={{ color: COLORS.accent }}>
+                  Subtitle Generation & Translation
+                </h2>
+                <form className="upload-form" onSubmit={handleGenerationSubmit}>
+                  <label className="file-label" style={{ color: COLORS.darkText }}>
+                    <span>Video File</span>
+                    <input
+                      type="file"
+                      name="generation"
+                      accept="video/*"
+                      onChange={handleGenerationUpload}
+                      required
+                    />
+                  </label>
+                  <label className="file-label" style={{ color: COLORS.darkText }}>
+                    <span>Language</span>
+                    <select
+                      className="language-dropdown"
+                      value={generationLang}
+                      onChange={handleLanguageChange}
+                      style={{
+                        background: COLORS.secondary,
+                        color: COLORS.darkText,
+                        marginLeft: 12,
+                        borderRadius: 5,
+                        border: `1px solid ${COLORS.border}`,
+                        height: 32,
+                        fontWeight: 500
+                      }}
+                    >
+                      {SUPPORTED_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="action-btn"
+                    style={{
+                      background: COLORS.accent,
+                      color: "#FFF",
+                      marginTop: 20
+                    }}
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? "Processing..." : "Generate Subtitles"}
+                  </button>
+                </form>
+              </div>
+            </section>
+          )}
+          {/* Result - Prominent card/section */}
+          <section className="result-section">
+            {result && (
+              <div className="result-card" style={{ background: COLORS.card, borderColor: COLORS.primary }}>
+                <h3 className="result-heading" style={{ color: COLORS.primary, fontWeight: 700 }}>
+                  {workflow === "correction" ? "Correction Result" : "Generation Result"}
+                </h3>
+                <p style={{ color: COLORS.darkText, marginBottom: 10 }}>
+                  {result.message}
+                </p>
+                <button
+                  className="download-btn"
+                  onClick={handleDownload}
+                  style={{
+                    background: workflow === "correction" ? COLORS.primary : COLORS.accent,
+                    color: "#FFF",
+                    border: "none",
+                    padding: "0.8em 2.1em",
+                    borderRadius: 6,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    marginTop: 6
+                  }}
+                  disabled={loading}
+                >
+                  Download {result.filename}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
       </main>
-      <footer className="app-footer">
-        &copy; {new Date().getFullYear()} Subtitle Sync Platform
+      {/* Footer */}
+      <footer className="dashboard-footer" style={{ background: "#fff", color: COLORS.lightText }}>
+        <div className="footer-content">
+          <span>
+            &copy; {new Date().getFullYear()} Subtitle Sync Platform &mdash; AI Subtitle Solutions
+          </span>
+        </div>
       </footer>
     </div>
   );
