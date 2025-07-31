@@ -32,7 +32,10 @@ class DatabaseManager:
         try:
             # Try to import and use the models
             import sys
-            sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+            parent_dir = os.path.join(os.path.dirname(__file__), "..")
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
             from Database.models import create_tables
             create_tables()
             logger.info("Database initialized using models.py")

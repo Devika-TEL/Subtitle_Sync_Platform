@@ -169,6 +169,12 @@ def get_db_connection():
 def init_database():
     """Initialize database tables"""
     try:
+        # Add parent directory to path to access Database module
+        import sys
+        parent_dir = os.path.join(os.path.dirname(__file__), "..")
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
         from Database.models import create_tables
         create_tables()
         logger.info("Database initialized successfully")
@@ -178,13 +184,53 @@ def init_database():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Create tables as defined in schema
-        with open(os.path.join(os.path.dirname(__file__), "..", "Database", "schema.sql"), 'r') as f:
-            schema = f.read()
-            cursor.executescript(schema)
+        # Create tables directly using embedded schema
+        schema_sql = """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            email TEXT,
+            role TEXT NOT NULL DEFAULT 'user'
+        );
+
+        CREATE TABLE IF NOT EXISTS videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL,
+            upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            language TEXT,
+            original BOOLEAN DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS subtitles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER REFERENCES videos(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL,
+            language TEXT,
+            upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed BOOLEAN DEFAULT 0,
+            job_id INTEGER REFERENCES jobs(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            video_id INTEGER REFERENCES videos(id) ON DELETE CASCADE,
+            subtitle_id INTEGER REFERENCES subtitles(id) ON DELETE CASCADE,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        """
         
+        cursor.executescript(schema_sql)
         conn.commit()
         conn.close()
+        logger.info("Database initialized with fallback schema")
 
 # Authentication helpers (stub for future integration)
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
