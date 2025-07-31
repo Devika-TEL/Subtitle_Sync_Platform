@@ -4,7 +4,6 @@ import {
   fireEvent,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import App from "./App";
 
@@ -12,9 +11,9 @@ import App from "./App";
 global.fetch = jest.fn();
 
 function mockCorrectionFlow() {
-  // Simulate upload response (correction), then job polling, then subtitle fetch
-  // 1: Correction POST returns job start
+  // Simulate backend responses for correction flow
   fetch
+    // 1: Correction POST returns job start
     .mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -116,22 +115,20 @@ describe("E2E Workflow UI/UX Tests", () => {
   test("Subtitle Correction: end-to-end happy path", async () => {
     mockCorrectionFlow();
     render(<App />);
-    // Should default to correction tab
+    // Correction tab present
     expect(screen.getByRole("heading", { name: /subtitle correction/i })).toBeInTheDocument();
 
-    // Attach dummy files to both file pickers
+    // Select files
     const file1 = new File(["dummymp4"], "video.mp4", { type: "video/mp4" });
     const file2 = new File(["dummy srt"], "sample.srt", { type: "text/plain" });
 
-    const videoBtn = screen.getByRole("button", { name: /video file/i });
-    fireEvent.click(videoBtn);
+    // Video input
+    fireEvent.click(screen.getByRole("button", { name: /video file/i }));
     const inputVideo = screen.getByLabelText(/video file/i, { selector: "input" });
-    // Setting file via input fires change event
     fireEvent.change(inputVideo, { target: { files: [file1] } });
 
-    // Subtitle file
-    const subBtn = screen.getByRole("button", { name: /subtitle file/i });
-    fireEvent.click(subBtn);
+    // Subtitle input
+    fireEvent.click(screen.getByRole("button", { name: /subtitle file/i }));
     const inputSub = screen.getByLabelText(/subtitle file/i, { selector: "input" });
     fireEvent.change(inputSub, { target: { files: [file2] } });
 
@@ -140,53 +137,48 @@ describe("E2E Workflow UI/UX Tests", () => {
     expect(submit).not.toBeDisabled();
     fireEvent.click(submit);
 
-    // Uploading spinner shows up
-    expect(await screen.findByText(/uploading\.\.\. please wait/i)).toBeInTheDocument();
+    // Upload spinner
+    expect(await screen.findByText(/uploading.*please wait/i)).toBeInTheDocument();
 
-    // Mock fetch resolves in background: job status should now become "in_progress"
+    // Job in_progress status
     await waitFor(() => expect(screen.getByText(/job status:/i)).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.getByText(/in_progress/i)).toBeInTheDocument();
     expect(screen.getByText(/correction underway/i)).toBeInTheDocument();
 
-    // Job progresses to "success" (polling completes)
+    // Job succeeds
     await waitFor(() => expect(screen.getByText(/success/i)).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.getByText(/correction complete/i)).toBeInTheDocument();
-    // Subtitle output ready panel appears
     expect(screen.getByText(/subtitle output is ready/i)).toBeInTheDocument();
   });
 
   test("Subtitle Generation: end-to-end happy path", async () => {
     mockGenerationFlow();
     render(<App />);
-    // Switch to generation tab:
-    const genTab = screen.getByRole("tab", { selected: false, name: /generation/i }) || screen.getByRole("button", { name: /subtitle generation/i });
+    // Switch to generation tab
+    const genTab = screen.getByRole("button", { name: /subtitle generation/i });
     fireEvent.click(genTab);
-
     expect(screen.getByRole("heading", { name: /subtitle generation/i })).toBeInTheDocument();
 
     const file3 = new File(["dummymp4"], "video2.mp4", { type: "video/mp4" });
-    const videoBtn = screen.getByRole("button", { name: /video file/i });
-    fireEvent.click(videoBtn);
+    fireEvent.click(screen.getByRole("button", { name: /video file/i }));
     const inputVideo = screen.getByLabelText(/video file/i, { selector: "input" });
     fireEvent.change(inputVideo, { target: { files: [file3] } });
 
-    // Select a language in the dropdown
+    // Select language
     const langSelect = screen.getByLabelText(/target language/i);
     fireEvent.change(langSelect, { target: { value: "en" } });
 
     // Submit
-    const submit = screen.getByRole("button", { name: /generate.*subtitles/i });
-    fireEvent.click(submit);
+    fireEvent.click(screen.getByRole("button", { name: /generate.*subtitles/i }));
 
-    // Upload spinner
-    expect(await screen.findByText(/uploading\.\.\. please wait/i)).toBeInTheDocument();
+    expect(await screen.findByText(/uploading.*please wait/i)).toBeInTheDocument();
 
-    // Wait for job status - in_progress
+    // Job status in_progress
     await waitFor(() => screen.getByText(/job status:/i), { timeout: 3000 });
     expect(screen.getByText(/in_progress/i)).toBeInTheDocument();
     expect(screen.getByText(/still processing/i)).toBeInTheDocument();
 
-    // Wait for job status to succeed
+    // Success
     await waitFor(() => screen.getByText(/success/i), { timeout: 3000 });
     expect(screen.getByText(/generation complete/i)).toBeInTheDocument();
     expect(screen.getByText(/subtitle output is ready/i)).toBeInTheDocument();
@@ -194,14 +186,9 @@ describe("E2E Workflow UI/UX Tests", () => {
 
   test("Error handling: missing file selection", async () => {
     render(<App />);
-    // Correction should be default
-    // Just submit with nothing selected:
     fireEvent.click(screen.getByRole("button", { name: /submit.*correction/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/please select both/i);
-
-    // Switch to generation
-    const genTab = screen.getByRole("tab", { selected: false, name: /generation/i }) || screen.getByRole("button", { name: /subtitle generation/i });
-    fireEvent.click(genTab);
+    fireEvent.click(screen.getByRole("button", { name: /subtitle generation/i }));
     fireEvent.click(screen.getByRole("button", { name: /generate.*subtitles/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/please select a video.*language/i);
   });
@@ -211,9 +198,7 @@ describe("E2E Workflow UI/UX Tests", () => {
       ok: false,
       json: async () => ({ detail: "Test upload error" }),
     });
-
     render(<App />);
-    // Correction tab: pick files, submit, see error panel
     const file1 = new File(["dummymp4"], "video.mp4", { type: "video/mp4" });
     const file2 = new File(["dummy srt"], "sample.srt", { type: "text/plain" });
     fireEvent.change(screen.getByLabelText(/video file/i, { selector: "input" }), {
@@ -223,12 +208,10 @@ describe("E2E Workflow UI/UX Tests", () => {
       target: { files: [file2] },
     });
     fireEvent.click(screen.getByRole("button", { name: /submit.*correction/i }));
-
     expect(await screen.findByRole("alert")).toHaveTextContent(/test upload error/i);
   });
 
   test("Displays polling/job status fetch error", async () => {
-    // Correction flow: POST is fine, but status polling fails
     fetch
       .mockResolvedValueOnce({
         ok: true,
@@ -243,7 +226,6 @@ describe("E2E Workflow UI/UX Tests", () => {
         ok: false,
         json: async () => ({ detail: "Job status fetch failed" }),
       });
-
     render(<App />);
     const file1 = new File(["dummymp4"], "video.mp4", { type: "video/mp4" });
     const file2 = new File(["dummy srt"], "sample.srt", { type: "text/plain" });
@@ -254,8 +236,6 @@ describe("E2E Workflow UI/UX Tests", () => {
       target: { files: [file2] },
     });
     fireEvent.click(screen.getByRole("button", { name: /submit.*correction/i }));
-
-    // Wait for polling error
     expect(await screen.findByRole("alert")).toHaveTextContent(/error updating job status/i);
   });
 });
