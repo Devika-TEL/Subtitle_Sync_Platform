@@ -1,4 +1,5 @@
 import os
+import sys
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status, Depends, Request, Path as FPath
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,8 +10,6 @@ from pathlib import Path
 from datetime import datetime
 
 # --- ORM & Database Imports ---
-import sys
-
 # Dynamically find the Database directory (for local/dev or prod reliably)
 DATABASE_PATH = str((Path(__file__).resolve().parent.parent / "Database"))
 if DATABASE_PATH not in sys.path:
@@ -55,7 +54,8 @@ app = FastAPI(
         {"name": "Generation", "description": "Subtitle and subtitle translation generation endpoints"},
         {"name": "Videos", "description": "Video metadata and file registry CRUD"},
         {"name": "Subtitles", "description": "Subtitle files metadata and CRUD"},
-        {"name": "Jobs", "description": "Job processing status and control CRUD"}
+        {"name": "Jobs", "description": "Job processing status and control CRUD"},
+        {"name": "Diagnostics", "description": "Utility diagnostic and health endpoints"}
     ],
 )
 
@@ -64,10 +64,17 @@ app = FastAPI(
 def startup_event():
     db_init.create_db()
 
+# PUBLIC_INTERFACE
 # Enable CORS for local and production frontend
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Add any production/staging UI URLs here
+    "*",  # To allow any origin (adjust for production security!)
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Set to specific domain in production
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -411,10 +418,6 @@ async def correction_upload(
     # ---- ACTUAL CORRECTION STEP ----
     # This block acts as the business logic layer.
     # For demonstration, we use a stub function; replace this with LLM/AI integration.
-    # Key tasks:
-    # - Validate subtitle (timing, compliance)
-    # - Detect and correct latency, burnt-in overlaps, rate/length problems
-    # - Write corrected subtitle to disk and update database
 
     def correct_subtitles(sub_path: Path, vid_path: Path) -> (Path, str):
         """
@@ -600,10 +603,42 @@ async def generation_upload(
         }, status_code=500)
 
 # PUBLIC_INTERFACE
-@app.get("/api/health", tags=["Utility"], summary="Health check", description="Returns 200 OK if backend is live.")
+@app.get("/api/health", tags=["Diagnostics"], summary="Health Check", description="Backend health and database connectivity diagnostics", response_description="Health status object")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """
+    Health check endpoint for backend diagnostics and connectivity.
+
+    Returns a JSON object with status and message. Useful for deployment checks, load balancers, or frontend connectivity testing.
+    """
+    try:
+        db_status = False
+        db_msg = ""
+        # Attempt simple DB query to verify connectivity
+        try:
+            with engine.connect() as conn:
+                conn.execute("SELECT 1")
+            db_status = True
+            db_msg = "OK"
+        except Exception as db_ex:
+            db_msg = str(db_ex)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "ok",
+                "backend": "ok",
+                "database": "ok" if db_status else "error",
+                "database_msg": db_msg
+            }
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "backend": "error",
+                "details": str(exc)
+            }
+        )
 
 # PUBLIC_INTERFACE
 @app.get("/api/openapi.json", include_in_schema=False)
