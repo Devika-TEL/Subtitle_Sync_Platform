@@ -4,10 +4,10 @@ import "./App.css";
 /**
  * PUBLIC_INTERFACE
  * App Root for Subtitle Sync Platform Dashboard.
- * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, and result/error display.
+ * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, accessible feedback, and result/error display.
  */
 function App() {
-  // Theme toggle
+  // Theme toggle (accessible with ARIA & focus-visible)
   const [theme, setTheme] = useState("light");
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -34,8 +34,9 @@ function App() {
   const [downloadLink, setDownloadLink] = useState(null);
   const [error, setError] = useState(null);
   const [polling, setPolling] = useState(false);
+  const [announce, setAnnounce] = useState(""); // For aria-live
 
-  // Brand color palette for styling
+  // Brand color palette for styling (aligned with extracted palette)
   const brandPalette = {
     primaryBlue: "#20388F",
     accentPurple: "#A41E7E",
@@ -44,7 +45,7 @@ function App() {
     neutralWhite: "#FFFFFF",
   };
 
-  // Language options
+  // Language options (expandable)
   const languageOptions = [
     { code: "en", label: "English" },
     { code: "es", label: "Spanish" },
@@ -63,6 +64,7 @@ function App() {
     setError(null);
     setUploading(false);
     setPolling(false);
+    setAnnounce("");
   }
 
   // Correction handler (video+subtitle)
@@ -70,10 +72,12 @@ function App() {
     e.preventDefault();
     resetAllStates();
     if (!correctionVideo || !correctionSub) {
-      setError("Please select both video and subtitle files.");
+      setError("Please select both a video file and a subtitle file.");
+      setAnnounce("File selection error.");
       return;
     }
     setUploading(true);
+    setAnnounce("Uploading files for correction.");
     try {
       const formData = new FormData();
       formData.append("video_file", correctionVideo);
@@ -98,12 +102,14 @@ function App() {
       setJobStatus({ status: data.status, message: data.message });
       setUploading(false);
       setPolling(true);
+      setAnnounce("Subtitle correction job started.");
     } catch (err) {
       setUploading(false);
       setError(
         err?.message ||
           "Failed to upload files. Please try again or check network connection."
       );
+      setAnnounce("Upload failed.");
     }
   }
 
@@ -113,9 +119,11 @@ function App() {
     resetAllStates();
     if (!generationVideo || !generationLang) {
       setError("Please select a video and output language.");
+      setAnnounce("File selection error.");
       return;
     }
     setUploading(true);
+    setAnnounce("Uploading file for generation.");
     try {
       const formData = new FormData();
       formData.append("video_file", generationVideo);
@@ -138,12 +146,14 @@ function App() {
       setJobStatus({ status: data.status, message: data.message });
       setUploading(false);
       setPolling(true);
+      setAnnounce("Subtitle generation job started.");
     } catch (err) {
       setUploading(false);
       setError(
         err?.message ||
           "Failed to upload file. Please try again or check network connection."
       );
+      setAnnounce("Upload failed.");
     }
   }
 
@@ -152,13 +162,21 @@ function App() {
     let pollInt = null;
     const API_BASE = process.env.REACT_APP_API_BASE || "";
     if (jobId && polling) {
-      // Start polling
       pollInt = setInterval(async () => {
         try {
           const resp = await fetch(`${API_BASE}/api/jobs/${jobId}`);
           if (!resp.ok) throw new Error("Could not check job status");
           const job = await resp.json();
           setJobStatus(job);
+
+          // Announce status change for screen readers
+          setAnnounce(
+            job.status === "success"
+              ? "Job completed successfully."
+              : job.status === "error"
+              ? "Job failed."
+              : `Job status: ${job.status}.`
+          );
 
           if (
             job.status === "success" ||
@@ -178,9 +196,7 @@ function App() {
                   `${API_BASE}/api/subtitles/${job.output_subtitle_id}`
                 );
                 if (subResp.ok) {
-                  const sub = await subResp.json();
-                  // For now, we do not have a direct static subtitle file serving path.
-                  // Instead, we display a note and the subtitle's stored location.
+                  // Optionally display a download link if backend supports static files
                   setDownloadLink(null);
                 }
               } catch {}
@@ -190,6 +206,7 @@ function App() {
           setError(
             "Error updating job status. Please refresh or try again later."
           );
+          setAnnounce("Error getting job status.");
           setPolling(false);
         }
       }, 1500);
@@ -200,26 +217,32 @@ function App() {
     // eslint-disable-next-line
   }, [jobId, polling]);
 
-  // Helper to extract filename from full path
-  function getFileNameFromPath(path) {
-    if (!path) return "";
-    return path.split("/").pop();
-  }
-
-  // Notice - clear error if any state changes
+  // Notice - clear error if any state changes and update aria-live
   useEffect(() => {
     if (error) {
+      setAnnounce("Error: " + error);
       const t = setTimeout(() => setError(null), 9000);
       return () => clearTimeout(t);
     }
   }, [error]);
 
-  // Render upload/progress/result panel for workflows
+  // Focus management: announce live polite region to a11y users
+  useEffect(() => {
+    if (announce && announce.length > 2) {
+      // Focus on status region for screenreader feedback
+      const region = document.getElementById("status-announcement");
+      if (region) region.focus();
+    }
+  }, [announce]);
+
+  // Render upload/progress/result panel for workflows, with a11y enhancements and helpful status notes
   function renderStatusPanel() {
-    // Error
     if (error)
       return (
         <div
+          role="alert"
+          aria-live="assertive"
+          tabIndex={-1}
           style={{
             margin: "20px 0 0 0",
             color: "#A41E7E",
@@ -230,12 +253,24 @@ function App() {
             fontWeight: 500,
           }}
         >
-          Error: {error}
+          <span aria-hidden="true">❗</span> Error: {error}
         </div>
       );
     if (uploading)
       return (
-        <div style={{ margin: "20px 0 0 0", color: brandPalette.primaryBlue }}>
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            margin: "20px 0 0 0",
+            color: brandPalette.primaryBlue,
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+          }}
+        >
+          <span className="sr-only">Uploading in progress</span>
+          <BusySpinner color={brandPalette.primaryBlue} size={16} />
           Uploading... Please wait.
         </div>
       );
@@ -248,7 +283,12 @@ function App() {
             border: "1.2px solid #a3c2fe",
             borderRadius: 8,
             padding: "18px 13px 9px 13px",
+            outline: jobStatus.status === "error" ? "2px solid #ED4C8B" : undefined,
           }}
+          tabIndex={-1}
+          id="status-announcement"
+          aria-live="polite"
+          aria-atomic="true"
         >
           <strong>
             Job Status:{" "}
@@ -265,7 +305,12 @@ function App() {
           </span>
           {jobStatus.progress !== undefined &&
             jobStatus.status !== "success" && (
-              <ProgressBar progress={jobStatus.progress || 10} />
+              <>
+                <ProgressBar progress={jobStatus.progress || 10} />
+                <span className="sr-only">
+                  {`Job progress: ${Math.round(jobStatus.progress)} percent.`}
+                </span>
+              </>
             )}
           {downloadLink ? (
             <div style={{ marginTop: 14 }}>
@@ -296,16 +341,75 @@ function App() {
                 fontSize: 15,
                 padding: "9px 11px"
               }}>
-                Subtitle output is ready! <br />
-                No direct download link is available yet.<br />
-                Please contact your administrator, or check the backend storage for the final subtitle file.
+                <span aria-hidden="true">✔️</span> Subtitle output is ready!
+                <br />
+                <span style={{ fontSize: "0.97em" }}>
+                  No direct download link is available yet.
+                  <br />
+                  Please contact your administrator or check the backend storage for the final subtitle file.
+                </span>
+                <br />
+                <span style={{ color: "#A41E7E" }}>
+                  If something went wrong or output didn't arrive, <b>refresh</b> or <b>try again</b>.
+                </span>
               </div>
             )
           )}
         </div>
       );
     }
-    return null;
+    // Explanatory info about workflow below forms
+    return (
+      <div
+        aria-live="polite"
+        className="info-message"
+        style={{
+          marginTop: 16,
+          fontSize: "1.01rem",
+          color: "#22223A",
+          background: "#fafbfd",
+          border: "1px solid #e5e7ee",
+          borderRadius: 8,
+          padding: "10px 14px",
+        }}
+      >
+        For best results:&nbsp;
+        <span style={{ color: brandPalette.primaryBlue }}>
+          Wait for your upload to finish, keep this tab open, and contact support if jobs fail multiple times.
+        </span>
+      </div>
+    );
+  }
+
+  // Spinner component for feedback during upload/wait
+  function BusySpinner({ color, size = 18 }) {
+    return (
+      <svg
+        width={size}
+        height={size}
+        style={{ margin: "0 3px -2px 0", verticalAlign: "middle" }}
+        viewBox="0 0 38 38"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <g fill="none" fillRule="evenodd">
+          <g transform="translate(1 1)" stroke={color} strokeWidth="3">
+            <circle strokeOpacity=".3" cx="18" cy="18" r="18" />
+            <path d="M36 18c0-9.94-8.06-18-18-18">
+              <animateTransform
+                attributeName="transform"
+                type="rotate"
+                from="0 18 18"
+                to="360 18 18"
+                dur="0.95s"
+                repeatCount="indefinite"
+              />
+            </path>
+          </g>
+        </g>
+      </svg>
+    );
   }
 
   // Color by job status
@@ -313,12 +417,12 @@ function App() {
     if (!status) return "#8c8ca6";
     if (status === "pending") return brandPalette.secondaryPink;
     if (status === "in_progress") return brandPalette.primaryBlue;
-    if (status === "success") return "#20A664"; // green
+    if (status === "success") return "#20A664";
     if (status === "error" || status === "cancelled") return "#A41E7E";
     return "#888";
   }
 
-  // ProgressBar: Simple filling bar component
+  // ProgressBar: Simple filling bar (a11y friendly)
   function ProgressBar({ progress }) {
     return (
       <div
@@ -330,6 +434,12 @@ function App() {
           borderRadius: 7,
           overflow: "hidden",
         }}
+        aria-label="Job progress"
+        role="progressbar"
+        aria-valuenow={progress || 1}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        tabIndex={-1}
       >
         <div
           style={{
@@ -356,6 +466,7 @@ function App() {
           className="theme-toggle"
           onClick={toggleTheme}
           aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          tabIndex={0}
           style={{
             background: brandPalette.secondaryPink,
             color: brandPalette.neutralWhite,
@@ -363,9 +474,12 @@ function App() {
         >
           {theme === "light" ? "🌙 Dark" : "☀️ Light"}
         </button>
-        <h1 className="dashboard-title">Subtitle Sync Platform</h1>
-        <p className="dashboard-description">
-          AI-powered subtitle correction and generation for your videos. Start by selecting a workflow below.
+        <h1 className="dashboard-title" tabIndex={0}>
+          Subtitle Sync Platform
+        </h1>
+        <p className="dashboard-description" tabIndex={0}>
+          AI-powered subtitle correction and generation for your videos.
+          Start by selecting a workflow below.
         </p>
       </header>
 
@@ -385,6 +499,8 @@ function App() {
               setCorrectionVideo(null); setCorrectionSub(null);
             }}
             aria-selected={workflow === "correction"}
+            tabIndex={0}
+            id="correction-tab"
           >
             Subtitle Correction
           </button>
@@ -401,21 +517,42 @@ function App() {
               setGenerationVideo(null); setGenerationLang("");
             }}
             aria-selected={workflow === "generation"}
+            tabIndex={0}
+            id="generation-tab"
           >
             Subtitle Generation
           </button>
         </nav>
 
         {/* Workflow Forms */}
-        <section className="workflow-content" role="region" aria-labelledby={`${workflow}-tab`}>
+        <section
+          className="workflow-content"
+          role="region"
+          aria-labelledby={`${workflow}-tab`}
+          tabIndex={-1}
+        >
           {workflow === "correction" && (
-            <form className="workflow-form" onSubmit={handleCorrectionSubmit}>
-              <h2 style={{ color: brandPalette.primaryBlue }}>Subtitle Correction</h2>
-              <p>Upload your video and an existing subtitle file.<br />
-                <span style={{fontSize:'0.93em',color:brandPalette.accentPurple}}>
+            <form
+              className="workflow-form"
+              onSubmit={handleCorrectionSubmit}
+              noValidate
+              aria-describedby="correction-desc"
+            >
+              <h2 style={{ color: brandPalette.primaryBlue }} id="correction-desc">
+                Subtitle Correction
+              </h2>
+              <p>
+                Upload your video and an existing subtitle file.
+                <br />
+                <span
+                  style={{
+                    fontSize: "0.93em",
+                    color: brandPalette.accentPurple,
+                  }}
+                >
                   Supported subtitle formats: SRT, VTT, ASS, SUB, TXT, DFXP, SBV.<br />
-                  Recommended video format: MP4, MOV, AVI, MKV.<br />
-                  Final output will match the uploaded subtitle's format.
+                  Recommended video formats: MP4, MOV, AVI, MKV.<br />
+                  Output will match the uploaded subtitle's format.
                 </span>
                 <br />
                 The system will correct and return a compliant subtitle file.
@@ -427,6 +564,7 @@ function App() {
                 value={correctionVideo}
                 required
                 brandColor={brandPalette.primaryBlue}
+                id="video-file-correction"
               />
               <FileUploader
                 label="Subtitle File"
@@ -435,6 +573,7 @@ function App() {
                 value={correctionSub}
                 required
                 brandColor={brandPalette.accentPurple}
+                id="subtitle-file-correction"
               />
               <button
                 className="submit-btn"
@@ -443,8 +582,11 @@ function App() {
                   background: brandPalette.secondaryPink,
                   color: brandPalette.neutralWhite,
                   marginTop: 24,
+                  outline: uploading ? "2px solid #ffc60b" : undefined,
                 }}
                 disabled={uploading}
+                aria-disabled={uploading}
+                aria-busy={uploading}
               >
                 Submit for Correction
               </button>
@@ -453,13 +595,23 @@ function App() {
           )}
 
           {workflow === "generation" && (
-            <form className="workflow-form" onSubmit={handleGenerationSubmit}>
-              <h2 style={{ color: brandPalette.accentPurple }}>Subtitle Generation</h2>
+            <form
+              className="workflow-form"
+              onSubmit={handleGenerationSubmit}
+              noValidate
+              aria-describedby="generation-desc"
+            >
+              <h2 style={{ color: brandPalette.accentPurple }} id="generation-desc">
+                Subtitle Generation
+              </h2>
               <p>
                 Upload a video file to generate subtitles.
                 <br />
-                <span style={{fontSize:'0.93em',color:brandPalette.accentPurple}}>
-                  Recommended video format: MP4, MOV, AVI, MKV.<br />
+                <span style={{
+                  fontSize: "0.93em",
+                  color: brandPalette.accentPurple,
+                }}>
+                  Recommended video formats: MP4, MOV, AVI, MKV.<br />
                   Subtitles will be generated using AI and translated if you choose a language different from the video language.<br />
                   Output will be in SRT format unless the backend determines otherwise.
                 </span>
@@ -473,9 +625,14 @@ function App() {
                 value={generationVideo}
                 required
                 brandColor={brandPalette.accentPurple}
+                id="video-file-generation"
               />
               <div className="input-group">
-                <label htmlFor="language-select" className="input-label" style={{ color: brandPalette.primaryBlue }}>
+                <label
+                  htmlFor="language-select"
+                  className="input-label"
+                  style={{ color: brandPalette.primaryBlue }}
+                >
                   Language
                 </label>
                 <select
@@ -488,6 +645,10 @@ function App() {
                     borderColor: brandPalette.primaryBlue,
                     color: brandPalette.primaryBlue,
                   }}
+                  tabIndex={0}
+                  aria-required="true"
+                  aria-label="Target Language"
+                  aria-describedby="language-desc"
                 >
                   <option value="" disabled>
                     -- Select Language --
@@ -498,6 +659,7 @@ function App() {
                     </option>
                   ))}
                 </select>
+                <span className="sr-only" id="language-desc">Choose the target subtitle language.</span>
               </div>
               <button
                 className="submit-btn"
@@ -506,14 +668,29 @@ function App() {
                   background: brandPalette.accentYellow,
                   color: brandPalette.primaryBlue,
                   marginTop: 24,
+                  outline: uploading ? "2px solid #A41E7E" : undefined,
                 }}
                 disabled={uploading}
+                aria-disabled={uploading}
+                aria-busy={uploading}
               >
                 Generate Subtitles
               </button>
               {renderStatusPanel()}
             </form>
           )}
+          {/* Aria-live region for screenreader announcements */}
+          <div
+            className="sr-only"
+            aria-live="polite"
+            aria-atomic="true"
+            role="status"
+            tabIndex={-1}
+            style={{ position: "absolute", left: "-9999px" }}
+            id="aria-status-region"
+          >
+            {announce}
+          </div>
         </section>
       </main>
 
@@ -528,7 +705,7 @@ function App() {
 
 /**
  * PUBLIC_INTERFACE
- * File uploader component for video and subtitle files.
+ * Accessible File uploader component for video and subtitle files.
  * Props:
  *   - label: string (display label)
  *   - accept: string (file MIME types)
@@ -536,22 +713,32 @@ function App() {
  *   - value: File | null (current file)
  *   - required: bool (optional)
  *   - brandColor: string (accent color for highlight)
+ *   - id: string (optional, for a11y/label)
  */
-function FileUploader({ label, accept, onChange, value, required, brandColor }) {
+function FileUploader({ label, accept, onChange, value, required, brandColor, id }) {
   const inputRef = useRef();
+  // Ensure proper aria-label and describedby for improved accessibility
   return (
     <div className="input-group">
-      <label className="input-label" style={{ color: brandColor }}>
+      <label
+        className="input-label"
+        style={{ color: brandColor }}
+        htmlFor={id}
+        id={id ? `${id}-label` : undefined}
+      >
         {label} {required && <span style={{ color: "#ED4C8B" }}>*</span>}
       </label>
       <div className="custom-file-input">
         <input
+          id={id}
+          aria-labelledby={id ? `${id}-label` : undefined}
           ref={inputRef}
           type="file"
           accept={accept}
           style={{ display: "none" }}
           onChange={(e) => onChange(e.target.files?.[0] || null)}
           tabIndex={0}
+          aria-required={required}
         />
         <button
           type="button"
@@ -562,6 +749,11 @@ function FileUploader({ label, accept, onChange, value, required, brandColor }) 
             background: "transparent",
           }}
           onClick={() => inputRef.current?.click()}
+          aria-label={value ? `Selected: ${value.name}` : `Select ${label}`}
+          tabIndex={0}
+          onKeyDown={e => {
+            if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          }}
         >
           {value ? `Selected: ${value.name}` : `Select ${label}`}
         </button>
@@ -592,4 +784,5 @@ function FileUploader({ label, accept, onChange, value, required, brandColor }) 
   );
 }
 
+// Offscreen (screen-reader only) style class to use for live regions (add this also in App.css)
 export default App;
