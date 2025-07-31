@@ -1,298 +1,170 @@
-import React, { useState } from 'react';
-import './App.css';
+import React, { useState } from "react";
+import "./App.css";
 
-// PUBLIC_INTERFACE
+/**
+ * PUBLIC_INTERFACE
+ * The main application layout for the Subtitle Sync Platform Dashboard.
+ * Provides card containers for uploads, progress, and subtitle management,
+ * with visually engaging UI components per branded design (see App.css).
+ */
 function App() {
-  /**
-   * Subtitle Sync Dashboard App
-   *
-   * Renders workflow selection, upload forms, job progress, result/error UI.
-   * Integrates with backend API for subtitle-audio correction/generation workflows.
-   * Uses REACT_APP_API_BASE from env as the API server base URL.
-   */
-
-  const [workflow, setWorkflow] = useState('correction'); // 'correction' or 'generation'
+  // State for file uploading and basic simulated progress for demonstration
   const [videoFile, setVideoFile] = useState(null);
-  const [subtitleFile, setSubtitleFile] = useState(null); // only for correction
-  const [language, setLanguage] = useState('en');
-  const [isUploading, setIsUploading] = useState(false);
-  const [jobId, setJobId] = useState(null);
-  const [jobStatus, setJobStatus] = useState(null);
-  const [resultUrl, setResultUrl] = useState(null);
-  const [progressText, setProgressText] = useState('');
-  const [error, setError] = useState(null);
+  const [subtitleFile, setSubtitleFile] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [progress, setProgress] = useState(0);
+  // Simulated subtitle items
+  const [subtitleList, setSubtitleList] = useState([
+    {id: 1, name: "Episode1.en.srt", status: "Ready", lang: "en"},
+    {id: 2, name: "Episode1.fr.srt", status: "In Progress", lang: "fr"},
+  ]);
 
-  const apiBase = process.env.REACT_APP_API_BASE || 'http://localhost:8000';
-
-  // PUBLIC_INTERFACE
-  const handleWorkflowChange = (e) => {
-    setWorkflow(e.target.value);
-    setSubtitleFile(null); // reset
-    setResultUrl(null);
-    setProgressText('');
-    setError(null);
-    setJobId(null);
-    setJobStatus(null);
-  };
-
-  // PUBLIC_INTERFACE
-  const handleFileChange = (setFile) => (event) => {
-    setFile(event.target.files[0]);
-    setResultUrl(null);
-    setError(null);
-  };
-
-  // PUBLIC_INTERFACE
-  const handleLanguageChange = (e) => {
-    setLanguage(e.target.value);
-  };
-
-  // PUBLIC_INTERFACE
-  async function handleSubmit(e) {
+  // Simulate upload & progress for demo UI
+  const handleUpload = (e) => {
     e.preventDefault();
-    setError(null);
-    setResultUrl(null);
-    setJobStatus(null);
-    setJobId(null);
-    setProgressText('');
-    setIsUploading(true);
-
-    // Build the form data
-    const formData = new FormData();
-    if (!videoFile) {
-      setError('Please select a video file.');
-      setIsUploading(false);
+    if (!videoFile || !subtitleFile) {
+      setUploadStatus("Please select both video and subtitle files.");
       return;
     }
-    formData.append('video', videoFile);
-
-    if (workflow === 'correction') {
-      if (!subtitleFile) {
-        setError('Please upload a subtitle file for correction workflow.');
-        setIsUploading(false);
-        return;
+    setProgress(0);
+    setUploadStatus("Uploading...");
+    let progressStep = 0;
+    const interval = setInterval(() => {
+      progressStep += 20;
+      setProgress(progressStep);
+      if (progressStep >= 100) {
+        clearInterval(interval);
+        setUploadStatus("Upload complete! Starting subtitle analysis...");
+        setTimeout(() => setUploadStatus("Processing complete. Subtitles ready."), 1800);
       }
-      formData.append('subtitle', subtitleFile);
-    }
-    formData.append('language', language);
+    }, 450);
+  };
 
-    try {
-      // Choose API endpoint
-      let endpoint = '';
-      if (workflow === 'correction') {
-        endpoint = '/api/correct_subtitles';
-      } else {
-        endpoint = '/api/generate_subtitles';
-      }
+  const handleFileChange = (type, e) => {
+    const file = e.target.files[0];
+    if (type === "video") setVideoFile(file);
+    else setSubtitleFile(file);
+  };
 
-      setProgressText('Uploading files and initiating job...');
-      const response = await fetch(`${apiBase}${endpoint}`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to start job (${response.status}): ${await response.text()}`);
-      }
-
-      const data = await response.json();
-      if (!data.job_id) {
-        throw new Error('Job submission failed: Missing job_id in response.');
-      }
-
-      setJobId(data.job_id);
-      setIsUploading(false);
-      setProgressText('Job started. Monitoring progress...');
-      monitorJobProgress(data.job_id);
-    } catch (err) {
-      setError(`Submission Error: ${err.message}`);
-      setIsUploading(false);
-    }
-  }
-
-  // PUBLIC_INTERFACE
-  async function monitorJobProgress(jobId) {
-    // Poll for job status periodically
-    let polling = true;
-    let pollInterval = 2000;
-
-    const statusEndpoint = `${apiBase}/api/job_status/${jobId}`;
-    const resultEndpoint = `${apiBase}/api/job_result/${jobId}`;
-
-    async function poll() {
-      if (!polling) return;
-      try {
-        const resp = await fetch(statusEndpoint);
-        if (!resp.ok) {
-          throw new Error(`Failed to fetch job status`);
-        }
-        const statusData = await resp.json();
-        setJobStatus(statusData.status || 'PENDING');
-        setProgressText(statusData.detail || `Job status: ${statusData.status}`);
-
-        if (statusData.status === 'COMPLETED') {
-          // Fetch download link or result
-          const resultResp = await fetch(resultEndpoint);
-          if (resultResp.ok) {
-            const resultObj = await resultResp.json();
-            if (resultObj.result_url) {
-              setResultUrl(resultObj.result_url.startsWith('http')
-                ? resultObj.result_url
-                : `${apiBase}${resultObj.result_url}`
-              );
-              setProgressText('Job completed! Download your result below.');
-            } else if (resultObj.detail) {
-              setResultUrl(null);
-              setProgressText(resultObj.detail);
-            }
-          } else {
-            setProgressText('Job completed, but failed to fetch result file.');
-            setResultUrl(null);
-          }
-          polling = false;
-        } else if (['FAILED', 'CANCELLED', 'ERROR'].includes(statusData.status)) {
-          setError(`Job ${statusData.status}: ${statusData.detail || ''}`);
-          polling = false;
-        } else {
-          setTimeout(poll, pollInterval);
-        }
-      } catch (err) {
-        setError('Error checking job status: ' + err.message);
-        polling = false;
-      }
-    }
-    poll();
-  }
-
-  // PUBLIC_INTERFACE
-  function renderUploadForm() {
-    return (
-      <form className="upload-form" onSubmit={handleSubmit}>
-        <label>
-          Video File:
-          <input
-            type="file"
-            accept="video/*"
-            onChange={handleFileChange(setVideoFile)}
-            required
-            disabled={isUploading || !!jobId}
-          />
-        </label>
-        {workflow === 'correction' && (
-          <label>
-            Subtitle File:
-            <input
-              type="file"
-              accept=".srt,.vtt,.ass,.sub"
-              onChange={handleFileChange(setSubtitleFile)}
-              required
-              disabled={isUploading || !!jobId}
-            />
-          </label>
-        )}
-        <label>
-          Language:
-          <select value={language} onChange={handleLanguageChange} disabled={isUploading || !!jobId}>
-            <option value="en">English</option>
-            <option value="es">Spanish</option>
-            <option value="fr">French</option>
-            <option value="zh">Chinese</option>
-            <option value="hi">Hindi</option>
-            {/* Add more languages as needed */}
-          </select>
-        </label>
-        <button type="submit" disabled={isUploading || !!jobId}>
-          {workflow === 'correction' ? 'Start Correction' : 'Start Generation'}
-        </button>
-      </form>
-    );
-  }
-
-  // PUBLIC_INTERFACE
-  function renderWorkflowSelector() {
-    return (
-      <div className="workflow-selector">
-        <label>
-          <input
-            type="radio"
-            value="correction"
-            checked={workflow === 'correction'}
-            onChange={handleWorkflowChange}
-            disabled={isUploading || !!jobId}
-          />
-          Subtitle Correction
-        </label>
-        <label>
-          <input
-            type="radio"
-            value="generation"
-            checked={workflow === 'generation'}
-            onChange={handleWorkflowChange}
-            disabled={isUploading || !!jobId}
-          />
-          Subtitle Generation
-        </label>
-      </div>
-    );
-  }
-
-  // PUBLIC_INTERFACE
-  function renderStatusAndResult() {
-    return (
-      <div className="status-section">
-        {progressText && (
-          <div className="progress-text">
-            <strong>{progressText}</strong>
-          </div>
-        )}
-        {jobStatus && <div>Job Status: <b>{jobStatus}</b></div>}
-        {resultUrl && (
-          <div className="result-link">
-            <a href={resultUrl} target="_blank" rel="noopener noreferrer" download>
-              Download Result Subtitle File
-            </a>
-          </div>
-        )}
-        {jobId && (
-          <button
-            onClick={() => window.location.reload()}
-            className="reset-btn"
-            aria-label="Start New Job"
-          >
-            New Job
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // PUBLIC_INTERFACE
-  function renderError() {
-    return (
-      error && <div className="error-message" aria-live="assertive">{error}</div>
-    );
-  }
-
+  // --- Dashboard
   return (
-    <div className="App">
-      <header>
-        <h1>Subtitle Sync Platform Dashboard</h1>
+    <div>
+      <header className="app-header">
+        <h1>Subtitle Sync Platform</h1>
         <p>
-          Upload video (and subtitle) files to check and correct subtitle timing issues or to generate new subtitles.<br/>
-          All processing is performed asynchronously. Monitor your job status below.
+          AI-powered workflow for subtitle-audio sync, QC, and fast multi-language subtitle generation.
         </p>
       </header>
-      <main>
-        {renderWorkflowSelector()}
-        {renderError()}
-        {!jobId && renderUploadForm()}
-        {jobId && renderStatusAndResult()}
-      </main>
-      <footer>
-        <small>
-          Powered by Audio-Subtitle-Sync LLM platform &copy; 2024. All rights reserved.
-        </small>
-      </footer>
+      <div className="dashboard-container">
+        <div className="dashboard-grid">
+          <main className="dashboard-main">
+            {/* Card: Upload panel */}
+            <section className="dashboard-card" aria-labelledby="section-upload">
+              <div className="section-title" id="section-upload">
+                Upload Video &amp; Subtitle
+              </div>
+              <form onSubmit={handleUpload} autoComplete="off" style={{display:"flex", flexDirection:"column", gap:"1.15em"}}>
+                <div className="form-group">
+                  <label htmlFor="video-upload">Video File</label>
+                  <input
+                    id="video-upload"
+                    type="file"
+                    accept="video/*"
+                    onChange={(e) => handleFileChange("video", e)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="subtitle-upload">Subtitle File</label>
+                  <input
+                    id="subtitle-upload"
+                    type="file"
+                    accept=".srt,.vtt,.ass,.sub"
+                    onChange={(e) => handleFileChange("subtitle", e)}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={!videoFile || !subtitleFile || uploadStatus.includes("Uploading")}
+                >
+                  Upload &amp; Analyze
+                </button>
+                {uploadStatus && (
+                  <div
+                    className={`status-message ${
+                      uploadStatus.toLowerCase().includes("complete")
+                        ? "status-success"
+                        : uploadStatus.toLowerCase().includes("error") || uploadStatus.toLowerCase().includes("please")
+                        ? "status-danger"
+                        : uploadStatus.toLowerCase().includes("uploading")
+                        ? "status-warning"
+                        : ""
+                    }`}
+                    style={{marginTop: ".5em"}}
+                    aria-live="polite"
+                  >
+                    {uploadStatus}
+                  </div>
+                )}
+                {progress > 0 && progress < 100 && (
+                  <div className="progress-bar-container" aria-label="Upload Progress" aria-valuenow={progress}>
+                    <div className="progress-bar" style={{ width: `${progress}%` }}></div>
+                  </div>
+                )}
+              </form>
+            </section>
+
+            {/* Card: Subtitle workflow */}
+            <section className="dashboard-card" aria-labelledby="section-subtitle">
+              <div className="section-title" id="section-subtitle">
+                Subtitle Files &amp; Management
+              </div>
+              <ul className="subtitle-list" style={{marginTop:'1em'}}>
+                {subtitleList.map(sub => (
+                  <li className="subtitle-item" key={sub.id}>
+                    <div>
+                      <span role="img" aria-label="Subtitle File">🗎</span> <strong>{sub.name}</strong>
+                      <span style={{marginLeft:10, color:"var(--color-subtext)", fontSize:'.96em'}}>({sub.lang})</span>
+                    </div>
+                    <div className="subtitle-actions">
+                      <span className={
+                          sub.status === "Ready"
+                            ? "status-success"
+                            : sub.status === "In Progress"
+                            ? "status-warning"
+                            : ""
+                        }>{sub.status}
+                      </span>
+                      <button className="button-like" style={{padding:'0.4em 1.4em', fontSize:'.98em'}}>Download</button>
+                      <button
+                        className="button-like"
+                        style={{
+                          padding:'0.4em 1.3em',
+                          background: 'linear-gradient(90deg, #ffae42, #fffde4)',
+                          color: '#b45d0c'
+                        }}>Edit</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </main>
+          <aside className="dashboard-side">
+            {/* Card: Demo panel for future features */}
+            <section className="dashboard-card" aria-labelledby="section-info">
+              <div className="section-title" id="section-info">How it Works</div>
+              <p>
+                <strong>1.</strong> <b>Upload</b> your video and subtitle files.<br/>
+                <strong>2.</strong> Our AI checks timing, format, compliance, and quality.<br/>
+                <strong>3.</strong> Download or edit auto-corrected subtitles.<br/>
+                <strong>4.</strong> Advanced: request translations, batch QC, or manual tweaks.
+              </p>
+              <p style={{fontSize:".92em", color:"var(--color-subtext)"}}>
+                Need help? Contact <a href="mailto:support@subsync.ai" style={{color:"var(--color-primary)"}}>support@subsync.ai</a>
+              </p>
+            </section>
+          </aside>
+        </div>
+      </div>
     </div>
   );
 }
