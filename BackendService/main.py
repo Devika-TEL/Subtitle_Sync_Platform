@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="Subtitle Sync Backend API",
-    description="Comprehensive API for subtitle-audio synchronization, generation, validation, correction, and translation services",
+    description="Comprehensive API for subtitle-audio synchronization, generation, validation, correction, and translation services. Frontend dashboard available at: https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001",
     version="1.0.0",
     openapi_tags=[
         {
@@ -76,12 +76,15 @@ app.add_middleware(
         "http://localhost:3000", 
         "http://localhost:3001",  # Backend port for potential cross-origin requests
         "http://localhost:3002",  # Local port 3002
-        # Primary deployment URLs - updated for proxy setup
+        # Current frontend URL - primary deployment
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001",
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai",
+        # Legacy URLs for backward compatibility
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
         "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai",
-        # Legacy URLs for backward compatibility
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
