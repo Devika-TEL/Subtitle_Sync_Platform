@@ -9,9 +9,25 @@ function App() {
   const [correctionVideoFile, setCorrectionVideoFile] = useState(null);
   const [correctionSubtitleFile, setCorrectionSubtitleFile] = useState(null);
   const [generationVideoFile, setGenerationVideoFile] = useState(null);
-  // Status/result states (stub - replace with backend integration)
+  // Language/validation states for Subtitle Generation workflow
+  const [languages] = useState([
+    { code: "", name: "Select Language" },
+    { code: "en", name: "English" },
+    { code: "es", name: "Spanish" },
+    { code: "fr", name: "French" },
+    { code: "de", name: "German" },
+    { code: "zh", name: "Chinese" },
+    { code: "hi", name: "Hindi" },
+    // Add more as needed
+  ]);
+  const [selectedLanguage, setSelectedLanguage] = useState("");
+  const [languageTouched, setLanguageTouched] = useState(false);
+
+  // Status/result states (could be shared across workflows)
   const [jobStatus, setJobStatus] = useState("");
   const [jobResultUrl, setJobResultUrl] = useState(null);
+  const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   // Handlers for forms
   const handleCorrectionVideoChange = (e) => {
@@ -22,26 +38,78 @@ function App() {
   };
   const handleGenerationVideoChange = (e) => {
     setGenerationVideoFile(e.target.files[0]);
+    setError("");
   };
 
-  // Submit handlers (TODO: call backend API)
+  // Language selection
+  const handleLanguageChange = (e) => {
+    setSelectedLanguage(e.target.value);
+    setLanguageTouched(true);
+    setError("");
+  };
+
+  // PUBLIC_INTERFACE
   const handleCorrectionSubmit = (e) => {
     e.preventDefault();
     setJobStatus("Processing subtitle correction...");
+    setJobResultUrl(null);
     setTimeout(() => {
       setJobStatus("Subtitle correction completed!");
       setJobResultUrl("/download/corrected-subtitle.srt");
     }, 1500);
   };
 
-  const handleGenerationSubmit = (e) => {
+  // PUBLIC_INTERFACE
+  const handleGenerationSubmit = async (e) => {
     e.preventDefault();
+    setError("");
+    setLanguageTouched(true);
+
+    if (!generationVideoFile) {
+      setError("Please select a video file to upload.");
+      return;
+    }
+    if (!selectedLanguage) {
+      setError("Please select a language before submitting.");
+      return;
+    }
+
+    setUploading(true);
     setJobStatus("Generating new subtitles...");
-    setTimeout(() => {
-      setJobStatus("Subtitle generation completed!");
-      setJobResultUrl("/download/generated-subtitle.srt");
-    }, 1500);
+    setJobResultUrl(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("video", generationVideoFile);
+      formData.append("language", selectedLanguage);
+
+      // Replace below with actual backend call!
+      // const response = await fetch('/api/generate_subtitles', {
+      //   method: 'POST',
+      //   body: formData,
+      // });
+      // if (!response.ok) throw new Error('Subtitle generation failed.');
+      // const data = await response.json();
+      // setJobStatus("Subtitle generation completed!");
+      // setJobResultUrl(data.subtitle_url);
+
+      // For demo/stub:
+      setTimeout(() => {
+        setUploading(false);
+        setJobStatus("Subtitle generation completed!");
+        setJobResultUrl("/download/generated-subtitle.srt");
+      }, 1500);
+
+    } catch (err) {
+      setError(err.message || "An error occurred");
+      setUploading(false);
+      setJobStatus("");
+    }
   };
+
+  // Helper for language selector CSS
+  const languageSelectorClass =
+    languageTouched && !selectedLanguage ? "language-invalid" : "";
 
   // Renderers
   const CorrectionTab = (
@@ -72,6 +140,7 @@ function App() {
       </button>
     </form>
   );
+
   const GenerationTab = (
     <form className="workflow-card" onSubmit={handleGenerationSubmit} aria-label="Subtitle Generation Form">
       <h2 className="workflow-card-header">Subtitle Generation</h2>
@@ -85,9 +154,42 @@ function App() {
         onChange={handleGenerationVideoChange}
         required
       />
-      <button className="primary-button" type="submit">
-        Start Generation
+      <label className="file-label" htmlFor="generation-language-selector" style={{ marginBottom: '0.1rem' }}>
+        Choose Language <span style={{ color: "red" }}>*</span>
+      </label>
+      <select
+        id="generation-language-selector"
+        value={selectedLanguage}
+        onChange={handleLanguageChange}
+        onBlur={() => setLanguageTouched(true)}
+        className={languageSelectorClass}
+        data-testid="language-selector"
+        required
+      >
+        {languages.map((lang) => (
+          <option key={lang.code} value={lang.code} disabled={lang.code === ""}>
+            {lang.name}
+          </option>
+        ))}
+      </select>
+      {languageTouched && !selectedLanguage && (
+        <div
+          style={{ color: "red", fontSize: "0.95em", marginTop: "4px" }}
+          data-testid="language-required-message"
+        >
+          Language is required.
+        </div>
+      )}
+      <button
+        className="primary-button"
+        type="submit"
+        disabled={uploading}
+        style={{ marginTop: '0.5rem' }}
+        data-testid="generate-btn"
+      >
+        {uploading ? "Generating..." : "Generate Subtitles"}
       </button>
+      {error && <div className="error-message" data-testid="error-message">{error}</div>}
     </form>
   );
 
