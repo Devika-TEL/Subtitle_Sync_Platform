@@ -11,14 +11,8 @@
   --focus-shadow: 0 0 0 2px var(--yellow-accent);
 }
 
-/* ... existing styles ... */
+/* ... other styles (header, forms, etc.) remain unchanged ... */
 
-.language-invalid {
-  border: 2px solid #e13c3c;
-  background: #fff6f6;
-}
-
-/* (rest of current App.css file) */
 body {
   background: var(--gray-bg);
   font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
@@ -27,7 +21,47 @@ body {
   padding: 0;
 }
 
-/* Header/Brand */
+/* --- Prominent Download Button --- */
+.download-section {
+  text-align: center;
+  margin-top: 32px;
+}
+
+.download-btn {
+  padding: 15px 40px;
+  background-color: #28a745;
+  color: #fff;
+  font-size: 1.3em;
+  border: none;
+  border-radius: 7px;
+  text-decoration: none;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(40,167,69,0.13);
+  transition: background-color 0.25s;
+  display: inline-block;
+  margin-top: 1.2em;
+}
+
+.download-btn:hover,
+.download-btn:focus {
+  background-color: #218838;
+  color: #fff;
+  outline: none;
+}
+
+/* Error message styling */
+.error-message {
+  color: #dc3545;
+  margin-top: 1em;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* Remove any status/polling UI styles from previous logic */
+/* --- End prominent download button --- */
+
+/* ******* Existing styles for structure and branding remain as before ******* */
 .app-header {
   background: linear-gradient(90deg, var(--primary-blue) 60%, var(--accent-purple) 100%);
   color: var(--white);
@@ -168,53 +202,15 @@ input[type="file"]:focus {
   outline: none;
   box-shadow: var(--focus-shadow);
 }
-.result-download {
-  display: inline-block;
-  margin-top: 1.3rem;
-  background: linear-gradient(90deg, var(--accent-purple) 51%, var(--secondary-pink) 100%);
-  color: var(--white);
-  font-size: 1.08rem;
-  padding: 0.8rem 2.2rem;
-  border-radius: 8px;
-  font-weight: 700;
-  text-decoration: none;
-  transition: var(--transition);
-}
-.result-download:hover,
-.result-download:focus {
-  background: var(--yellow-accent);
-  color: var(--primary-blue);
-  text-decoration: underline;
-}
 
-.job-status-card {
-  background: var(--white);
-  box-shadow: var(--card-shadow);
-  border-radius: var(--card-radius);
-  border: 2.3px solid var(--accent-purple);
-  padding: 1.6rem 2.1rem 1.5rem 2.1rem;
-  font-size: 1rem;
-  min-height: 80px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.job-status-header {
-  color: var(--accent-purple);
-  font-size: 1.10rem;
-  font-weight: 600;
-  margin-bottom: .5rem;
-}
-.status-text {
-  color: var(--primary-blue);
-  font-weight: 500;
-}
-.status-placeholder {
-  color: #989fb9;
-  font-style: italic;
-}
-.job-status-details {
-  margin-top: 0.5rem;
+@media only screen and (max-width: 550px) {
+  .main-content {
+    max-width: 96vw;
+    padding: 0 0.2rem;
+  }
+  .workflow-card {
+    padding: 1.4rem 0.7rem;
+  }
 }
 
 /* Footer */
@@ -228,14 +224,4 @@ input[type="file"]:focus {
   letter-spacing: 1.2px;
   margin-top: 4rem;
   border-radius: 17px 17px 0 0;
-}
-@media only screen and (max-width: 550px) {
-  .main-content {
-    max-width: 96vw;
-    padding: 0 0.2rem;
-  }
-  .workflow-card,
-  .job-status-card {
-    padding: 1.4rem 0.7rem;
-  }
 }
