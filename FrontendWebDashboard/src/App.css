@@ -1,174 +1,134 @@
-.dashboard-root {
+.dashboard-background {
   min-height: 100vh;
+  background: linear-gradient(120deg, #102040 0%, #425392 100%);
   display: flex;
   flex-direction: column;
-  background: var(--dashboard-bg, #f5f8fa);
-  font-family: "Segoe UI", "Roboto", "Arial", sans-serif;
-  color: #222;
 }
 
 .dashboard-header {
-  padding: 1.5rem 2rem 1rem 2rem;
-  background: #2a4378;
-  color: #fff;
-  box-shadow: 0 2px 8px 0 #00529220;
+  background: #191f30;
+  color: #f6f6f6;
+  padding: 2rem 0 1rem 0;
   text-align: center;
+  margin-bottom: 0.5rem;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.08);
 }
+
 .dashboard-header h1 {
-  margin: 0.2em 0 0.1em 0;
-  font-size: 2.3rem;
-  letter-spacing: 1px;
-  font-weight: 700;
+  margin: 0;
+  font-size: 2.5rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
 }
-.dashboard-header h2 {
-  margin: 0 0 0.5em 0;
-  font-size: 1.05rem;
+
+.dashboard-tagline {
+  margin-top: 0.3rem;
+  color: #accaff;
+  font-size: 1.1rem;
   font-weight: 400;
-  color: #d5e3f4;
-  letter-spacing: 0.2px;
 }
 
-.dashboard-main {
-  flex: 1;
+.dashboard-grid {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
   justify-content: center;
-  margin-top: 2.5rem;
+  gap: 2rem;
+  padding: 2rem;
 }
 
-.upload-form {
+.dashboard-card {
   background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 2px 16px 0 #2a437814;
-  padding: 2rem 2.5rem 1.5rem 2.5rem;
-  width: 360px;
+  box-shadow: 0 2px 16px rgba(34, 52, 90, 0.13);
+  border-radius: 14px;
+  min-width: 320px;
+  max-width: 340px;
+  margin: 0.5rem;
+  padding: 2rem 1.5rem 1.5rem 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1.7rem;
-  max-width: 97vw;
-}
-.form-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5em;
-}
-.upload-form label {
-  font-size: 1.05em;
-  color: #28416f;
-  font-weight: 500;
-}
-.upload-form input[type="file"] {
-  margin-top: 0.45em;
-  font-family: inherit;
+  align-items: center;
+  transition: transform 0.1s, box-shadow 0.1s;
 }
 
-.submit-btn,
-.reset-btn {
-  background: #2a4378;
-  color: #fff;
+.dashboard-card:hover, .dashboard-card:focus-within {
+  box-shadow: 0 6px 36px 0 #191f30bb;
+  transform: translateY(-3px) scale(1.015);
+}
+
+.highlight-card {
+  border-left: 4px solid #4666ff;
+}
+
+.dashboard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.3rem;
+  width: 100%;
+}
+
+.dashboard-form input[type="file"] {
+  margin-top: 0.5rem;
+}
+
+.dashboard-btn {
+  margin-top: 1.2rem;
+  padding: 0.6rem 1.2rem;
   border: none;
-  border-radius: 6px;
-  padding: 0.7em 1.2em;
-  font-size: 1.09em;
-  font-weight: 600;
+  background-color: #4666ff;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: bold;
+  box-shadow: 0 2px 8px 0 #4666ff44;
   cursor: pointer;
-  transition: background 0.15s;
-}
-.submit-btn:disabled {
-  background: #a5b5d1;
-  cursor: not-allowed;
-}
-.submit-btn:not(:disabled):hover,
-.reset-btn:hover {
-  background: #183666;
+  transition: background 0.17s;
 }
 
-.error-message {
-  color: #c72600;
-  font-size: 1.01em;
-  margin-top: 0.6em;
-  text-align: center;
+.dashboard-btn:hover,
+.dashboard-btn:focus {
+  background-color: #2942a5;
+  color: #fff;
 }
 
-.job-status-section {
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 2px 16px 0 #2a437814;
-  padding: 2rem 2.5rem 2.5rem 2.5rem;
-  width: 370px;
-  max-width: 97vw;
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
-  align-items: left;
+.dashboard-download-btn {
+  background: linear-gradient(90deg, #72d8c8 0%, #4666ff 100%);
+  color: #172444;
+  font-weight: bold;
+  box-shadow: 0 2px 12px 0 #35d6bb44;
 }
-.status-processing {
-  color: #38638c;
+
+.dashboard-download-btn:hover,
+.dashboard-download-btn:focus {
+  background: linear-gradient(90deg, #4666ff 0%, #72d8c8 100%);
+  color: #091020;
 }
-.status-completed {
-  color: #28794e;
-  font-weight: 600;
-}
-.status-error {
-  color: #c72600;
-  font-weight: 600;
-}
-.job-loading,
-.job-progress-message {
-  color: #38638c;
-  margin-top: 0.7em;
-  font-size: 1.08em;
-}
-.polling-indicator {
-  font-size: 1.15em;
-  vertical-align: middle;
-}
-.downloads-block {
-  margin-top: 1.4em;
-  font-size: 1.08em;
-}
-.download-link {
-  color: #2a4378;
-  font-weight: 600;
-  font-size: 1.08em;
-  text-decoration: underline;
-  margin-right: 0.5em;
-}
-.download-link:active,
-.download-link:focus,
-.download-link:hover {
-  color: #173359;
-}
-.downloads-block ul {
-  padding-left: 1.5em;
-  margin: 0.45em 0 1.2em 0;
-}
-.downloads-block li {
-  margin-bottom: 0.4em;
+
+.feature-list {
+  color: #425392;
+  list-style: square inside;
+  padding-left: 0;
+  margin: 0.7rem 0 0 0;
 }
 
 .dashboard-footer {
-  background: #e9eef3;
-  color: #205185;
-  padding: 1.1rem 0.7rem 1rem 0.7rem;
-  margin-top: 2.3em;
-  font-size: 1.01em;
+  background: #202840;
   text-align: center;
-  border-top: 1px solid #c7d8ea4a;
+  color: #c7e4ff;
+  padding: 1rem;
+  font-size: 1rem;
+  margin-top: auto;
+  letter-spacing: 0.01em;
+  box-shadow: 0 -2px 8px 0 #0a1a3022;
 }
 
-@media (max-width: 540px) {
-  .dashboard-main,
-  .job-status-section,
-  .upload-form {
-    margin-top: 1.3rem;
-    padding: 1.1rem 0.6rem 1.4rem 0.6rem;
-    width: 98vw;
+@media (max-width: 900px) {
+  .dashboard-grid {
+    flex-direction: column;
+    align-items: center;
+    padding: 1rem;
   }
-  .dashboard-header h1 {
-    font-size: 1.43rem;
-  }
-  .dashboard-header h2 {
-    font-size: 0.97rem;
+  .dashboard-card {
+    min-width: 90vw;
+    max-width: 99vw;
   }
 }
