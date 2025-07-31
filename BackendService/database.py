@@ -21,10 +21,27 @@ class DatabaseManager:
         self.ensure_database_exists()
     
     def ensure_database_exists(self):
-        """Ensure database file and directory exist"""
+        """Ensure database file and directory exist and users table exists"""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        
+
+        needs_init = False
         if not os.path.exists(self.db_path):
+            needs_init = True
+        else:
+            # Check if users table exists in the database
+            try:
+                conn = sqlite3.connect(self.db_path)
+                c = conn.cursor()
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+                exists = c.fetchone()
+                conn.close()
+                if not exists:
+                    needs_init = True
+            except Exception as e:
+                logger.warning(f"Exception checking users table: {e}")
+                needs_init = True
+
+        if needs_init:
             self.initialize_database()
     
     def initialize_database(self):
@@ -34,7 +51,7 @@ class DatabaseManager:
             import sys
             sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
             from Database.models import create_tables
-            create_tables()
+            create_tables(self.db_path)
             logger.info("Database initialized using models.py")
         except Exception as e:
             logger.warning(f"Could not initialize using models.py: {e}")
