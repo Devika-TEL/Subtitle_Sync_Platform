@@ -1,26 +1,22 @@
 :root {
-  --primary: #4638e0;
-  --accent: #ff9b4b;
-  --secondary: #efeffa;
-  --success: #5fc979;
-  --error: #df3549;
-  --background: #f6f7fc;
-  --card: #ffffff;
-  --lightText: #7c81a1;
-  --darkText: #23234b;
-  --border: #e1e3ed;
+  --evp-blue: #20388F;
+  --evp-purple: #A41E7E;
+  --evp-pink: #ED4C8B;
+  --evp-yellow: #FFC60B;
+  --evp-white: #FFFFFF;
 }
 
 body {
-  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-  background: var(--background);
+  background: var(--evp-white);
+  color: var(--evp-blue);
+  font-family: 'Segoe UI', Arial, sans-serif;
   margin: 0;
   padding: 0;
 }
 
 .dashboard-bg {
   min-height: 100vh;
-  background: var(--background);
+  background: var(--evp-white);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -31,9 +27,9 @@ body {
   align-items: center;
   padding: 0 0 0 32px;
   height: 78px;
-  background: var(--primary);
-  box-shadow: 0 2px 16px 0 rgba(70, 56, 224, 0.09);
-  border-bottom: 4px solid var(--accent);
+  background: var(--evp-blue);
+  box-shadow: 0 2px 16px 0 rgba(32, 56, 143, 0.09);
+  border-bottom: 4px solid var(--evp-yellow);
 }
 
 .header-content {
@@ -56,24 +52,24 @@ body {
 .main-title {
   font-size: 2.2rem;
   margin: 0;
-  color: #fff;
+  color: var(--evp-white);
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .subtitle {
   font-size: 1.07rem;
-  color: var(--accent);
+  color: var(--evp-yellow);
   font-weight: 600;
   margin-top: 1px;
   letter-spacing: 0.017em;
 }
 
 .workflow-nav {
-  background: var(--secondary);
+  background: var(--evp-white);
   padding-top: 0.5rem;
   padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--border);
+  border-bottom: 2px solid var(--evp-blue);
   display: flex;
   justify-content: center;
 }
@@ -82,38 +78,38 @@ body {
   display: flex;
   border-radius: 12px;
   gap: 9px;
-  background: var(--secondary);
-  box-shadow: 0 2px 8px 0 rgba(70, 56, 224, 0.03);
+  background: var(--evp-white);
+  box-shadow: 0 2px 8px 0 rgba(32, 56, 143, 0.04);
 }
 
 .workflow-tab {
   padding: 0.7em 2.7em;
   border-radius: 9px 9px 0 0;
-  border: 2.5px solid var(--border);
-  background: var(--secondary);
-  color: var(--primary);
+  border: 2.5px solid transparent;
+  background: var(--evp-white);
+  color: var(--evp-blue);
   font-size: 1.12rem;
   letter-spacing: 0.019em;
   font-weight: 500;
   outline: none;
   margin-bottom: -2.5px;
-  transition: background 0.12s, color 0.12s, border-color 0.18s;
+  transition: background 0.14s, color 0.14s, border-color 0.19s;
   cursor: pointer;
   border-bottom: none;
 }
 
 .workflow-tab.active,
 .workflow-tab:focus {
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
+  background: var(--evp-purple);
+  color: var(--evp-white);
+  border-color: var(--evp-pink);
   z-index: 2;
   position: relative;
 }
 
 .workflow-tab:last-child.active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--evp-pink);
+  border-color: var(--evp-yellow);
 }
 
 .dashboard-content {
@@ -140,22 +136,23 @@ body {
 }
 
 .workflow-card {
-  background: var(--card);
-  border: 1.7px solid var(--primary);
+  background: var(--evp-blue);
+  border: 1.7px solid var(--evp-purple);
   border-radius: 18px;
-  box-shadow: 0 4px 18px 0 rgba(70, 56, 224, 0.07);
+  box-shadow: 0 4px 18px 0 rgba(32, 56, 143, 0.12);
   padding: 44px 42px 34px 42px;
   margin-bottom: 0px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  color: var(--evp-white);
 }
 
 .workflow-title {
   margin-bottom: 20px;
   font-size: 1.36rem;
   font-weight: 700;
-  color: var(--primary);
+  color: var(--evp-yellow);
   letter-spacing: 0.014em;
 }
 
@@ -173,27 +170,28 @@ body {
   font-size: 1.11rem;
   font-weight: 500;
   margin-bottom: 4px;
-  color: var(--darkText);
+  color: var(--evp-yellow);
 }
 
 .file-label input[type="file"] {
   margin-left: 19px;
   font-size: 1em;
-  background: var(--secondary);
+  background: var(--evp-purple);
+  color: var(--evp-white);
   border-radius: 6px;
   padding: 5px 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--evp-pink);
   cursor: pointer;
 }
 
 .language-dropdown {
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1.2px solid var(--border);
+  border: 1.2px solid var(--evp-purple);
   font-size: 1.04rem;
   font-weight: 500;
-  background: var(--secondary);
-  color: var(--darkText);
+  background: var(--evp-white);
+  color: var(--evp-purple);
 }
 
 .action-btn {
@@ -204,16 +202,16 @@ body {
   letter-spacing: 0.018em;
   border: none;
   cursor: pointer;
-  background: var(--primary);
-  color: #fff;
-  box-shadow: 0 2px 8px 0 rgba(70, 56, 224, 0.05);
-  transition: background 0.14s, color 0.14s;
+  background: var(--evp-purple);
+  color: var(--evp-white);
+  box-shadow: 0 2px 8px 0 rgba(32, 56, 143, 0.09);
+  transition: background 0.18s, color 0.15s;
 }
 
 .action-btn[disabled] {
-  background: #afafc7;
+  background: #c5aac4;
   cursor: wait;
-  color: #dedeea;
+  color: var(--evp-yellow);
 }
 
 .result-section {
@@ -221,10 +219,10 @@ body {
 }
 
 .result-card {
-  background: var(--card);
-  border: 2.5px solid var(--primary);
+  background: var(--evp-white);
+  border: 2.5px solid var(--evp-pink);
   border-radius: 11px;
-  box-shadow: 0 5px 25px 0 rgba(70, 56, 224, 0.09);
+  box-shadow: 0 5px 25px 0 rgba(164, 30, 126, 0.13);
   padding: 28px 27px 18px 27px;
   margin: 0 auto;
   max-width: 480px;
@@ -234,13 +232,14 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  color: var(--evp-blue);
 }
 
 .result-heading {
   font-size: 1.21rem;
   font-weight: 700;
   margin-bottom: 7px;
-  color: var(--primary);
+  color: var(--evp-purple);
 }
 
 .download-btn {
@@ -248,31 +247,96 @@ body {
   border-radius: 8px;
   font-size: 1.10rem;
   font-weight: 700;
-  background: var(--primary);
+  background: var(--evp-pink);
   border: none;
-  color: #fff;
+  color: var(--evp-white);
   margin-top: 16px;
   transition: background 0.12s, color 0.12s;
-  box-shadow: 0 2px 8px 0 rgba(70, 56, 224, 0.09);
+  box-shadow: 0 2px 8px 0 rgba(237, 76, 139, 0.13);
   cursor: pointer;
 }
 
 .download-btn[disabled] {
   background: #cacada;
-  color: #dedeea;
+  color: var(--evp-yellow);
   cursor: wait;
 }
 
 .dashboard-footer {
   text-align: center;
   padding: 22px 0 18px 0;
-  border-top: 2px solid var(--border);
-  color: var(--lightText);
+  border-top: 3px solid var(--evp-yellow);
+  color: var(--evp-purple);
   font-size: 0.99rem;
   letter-spacing: 0.009em;
-  background: #fff;
+  background: var(--evp-white);
   margin-top: auto;
 }
+
+/* Feedback & status highlights */
+.status-success {
+  background: #e8fbe8;
+  color: var(--evp-blue);
+  border-left: 5px solid var(--evp-yellow);
+}
+.status-warning {
+  background: #fffbe8;
+  color: var(--evp-pink);
+  border-left: 5px solid var(--evp-yellow);
+}
+.status-error {
+  background: #fde8ef;
+  color: var(--evp-purple);
+  border-left: 5px solid var(--evp-pink);
+}
+.feedback {
+  font-size: 1.07rem;
+  margin: 1.2rem 0 0.7rem 0;
+  padding: 0.8rem 1.3rem;
+  border-radius: 6px;
+  font-weight: 500;
+  display: inline-block;
+}
+
+a, .App-link {
+  color: var(--evp-pink);
+  text-decoration: none;
+  transition: color 0.16s;
+}
+a:hover, .App-link:hover {
+  color: var(--evp-yellow);
+  text-decoration: underline;
+}
+
+input, textarea, select {
+  border: 2px solid var(--evp-purple);
+  border-radius: 6px;
+  font-size: 1rem;
+  padding: 0.6rem 1rem;
+  margin: 0.5rem 0;
+  outline: none;
+  transition: border 0.14s;
+}
+input:focus, textarea:focus, select:focus {
+  border: 2.5px solid var(--evp-pink);
+  background: #f7f2fa;
+}
+
+hr {
+  border: 1.5px solid var(--evp-yellow);
+  margin: 2rem 0;
+}
+
+.bg-yellow { background: var(--evp-yellow); color: var(--evp-blue); }
+.bg-pink { background: var(--evp-pink); color: var(--evp-white); }
+.bg-purple { background: var(--evp-purple); color: var(--evp-white); }
+.bg-blue { background: var(--evp-blue); color: var(--evp-yellow); }
+.text-purple { color: var(--evp-purple); }
+.text-pink { color: var(--evp-pink); }
+.text-yellow { color: var(--evp-yellow); }
+.text-blue { color: var(--evp-blue); }
+.text-white { color: var(--evp-white); }
+.shadow-light { box-shadow: 0 2px 8px rgba(32,56,143,0.10); }
 
 /* Responsive layout for tablets & phones */
 @media (max-width: 800px) {
