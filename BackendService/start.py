@@ -104,7 +104,7 @@ class BackendApplication:
             # Startup
             await self.startup()
             
-            # Start uvicorn server
+            # Start uvicorn server with increased limits for large file uploads
             config = uvicorn.Config(
                 "main:app",
                 host=self.config.settings.host,
@@ -115,7 +115,11 @@ class BackendApplication:
                 limit_max_requests=1000,
                 limit_concurrency=1000,
                 timeout_keep_alive=30,
-                timeout_graceful_shutdown=30
+                timeout_graceful_shutdown=30,
+                # Increase limits for large file uploads (2GB)
+                http="httptools",  # Use httptools for better performance
+                ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
+                h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
             )
             
             server = uvicorn.Server(config)
@@ -132,7 +136,7 @@ class BackendApplication:
 # PUBLIC_INTERFACE
 def run_development_server():
     """
-    Run development server with hot reload
+    Run development server with hot reload and large file upload support
     """
     config = get_config()
     
@@ -146,7 +150,11 @@ def run_development_server():
         limit_max_requests=1000,
         limit_concurrency=1000,
         timeout_keep_alive=30,
-        timeout_graceful_shutdown=30
+        timeout_graceful_shutdown=30,
+        # Increase limits for large file uploads during development
+        http="httptools",
+        ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
+        h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
     )
 
 # PUBLIC_INTERFACE

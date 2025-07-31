@@ -15,6 +15,7 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, max_upload_size: int = 2 * 1024 * 1024 * 1024):  # 2GB default
         super().__init__(app)
         self.max_upload_size = max_upload_size
+        logger.info(f"FileSizeMiddleware initialized with max upload size: {max_upload_size // (1024*1024)}MB")
     
     async def dispatch(self, request: Request, call_next):
         """Process request and handle file size validation"""
@@ -25,56 +26,80 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
             content_length = request.headers.get("content-length")
             
             if content_length:
-                content_length = int(content_length)
-                
-                # Check if content length exceeds limit
-                if content_length > self.max_upload_size:
-                    logger.warning(f"File upload rejected: size {content_length} exceeds limit {self.max_upload_size}")
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File too large. Maximum size allowed: {self.max_upload_size // (1024*1024)}MB"
-                    )
+                try:
+                    content_length = int(content_length)
+                    logger.info(f"Upload request to {request.url.path} with content length: {content_length // (1024*1024)}MB")
+                    
+                    # Check if content length exceeds limit
+                    if content_length > self.max_upload_size:
+                        logger.warning(f"File upload rejected: size {content_length} exceeds limit {self.max_upload_size}")
+                        # Let the error bubble up so CORSHeadersMiddleware can handle it
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File too large. Maximum size allowed: {self.max_upload_size // (1024*1024)}MB"
+                        )
+                except ValueError:
+                    logger.warning(f"Invalid content-length header: {content_length}")
         
         # Continue with request processing
-        try:
-            response = await call_next(request)
-            return response
-        except Exception as e:
-            logger.error(f"Request processing error: {e}")
-            # Don't re-raise HTTPExceptions as they're handled by FastAPI
-            if isinstance(e, HTTPException):
-                raise
-            # For other exceptions, return a generic error
-            raise HTTPException(status_code=500, detail="Internal server error")
+        response = await call_next(request)
+        return response
 
 class CORSHeadersMiddleware(BaseHTTPMiddleware):
-    """Additional CORS middleware to ensure proper headers are set"""
+    """Additional CORS middleware to ensure proper headers are set on all responses including errors"""
     
     def __init__(self, app):
         super().__init__(app)
+        self.allowed_origins = [
+            "http://localhost:3000",
+            "http://localhost:3001", 
+            "http://localhost:3002",
+            "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
+            "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"
+        ]
+    
+    def _add_cors_headers(self, response: Response, origin: str = None):
+        """Add CORS headers to response"""
+        if origin and (origin in self.allowed_origins or "beta01.cloud.kavia.ai" in origin):
+            response.headers["access-control-allow-origin"] = origin
+            response.headers["access-control-allow-credentials"] = "true"
+            response.headers["access-control-allow-methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+            response.headers["access-control-allow-headers"] = "*"
+            response.headers["access-control-expose-headers"] = "*"
     
     async def dispatch(self, request: Request, call_next):
-        """Add additional CORS headers if needed"""
+        """Add CORS headers to all responses including error responses"""
+        origin = request.headers.get("origin")
         
-        response = await call_next(request)
+        # Handle preflight requests
+        if request.method == "OPTIONS":
+            from starlette.responses import Response
+            response = Response()
+            self._add_cors_headers(response, origin)
+            return response
         
-        # Ensure CORS headers are present for all responses
-        if not response.headers.get("access-control-allow-origin"):
-            origin = request.headers.get("origin")
-            if origin:
-                # Check if origin is allowed (basic check)
-                allowed_origins = [
-                    "http://localhost:3000",
-                    "http://localhost:3001", 
-                    "http://localhost:3002",
-                    "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"
-                ]
-                
-                # Check for cloud kavia.ai domains
-                if origin in allowed_origins or "beta01.cloud.kavia.ai" in origin:
-                    response.headers["access-control-allow-origin"] = origin
-                    response.headers["access-control-allow-credentials"] = "true"
-                    response.headers["access-control-allow-methods"] = "*"
-                    response.headers["access-control-allow-headers"] = "*"
+        try:
+            response = await call_next(request)
+        except HTTPException as e:
+            # Create error response with CORS headers
+            from fastapi.responses import JSONResponse
+            response = JSONResponse(
+                status_code=e.status_code,
+                content={"detail": e.detail}
+            )
+            self._add_cors_headers(response, origin)
+            return response
+        except Exception as e:
+            # Handle unexpected errors with CORS headers
+            from fastapi.responses import JSONResponse
+            logger.error(f"Unexpected error in CORS middleware: {e}")
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"}
+            )
+            self._add_cors_headers(response, origin)
+            return response
         
+        # Add CORS headers to successful responses
+        self._add_cors_headers(response, origin)
         return response
