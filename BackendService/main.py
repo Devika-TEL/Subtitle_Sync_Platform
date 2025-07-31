@@ -22,7 +22,7 @@ from pathlib import Path
 import subprocess
 import re
 from subtitle_processor import subtitle_processor
-from middleware import FileSizeMiddleware, CORSHeadersMiddleware
+from middleware import FileSizeMiddleware
 from auth import UserAuth, session_manager
 
 # Configure comprehensive logging
@@ -95,8 +95,7 @@ app.add_middleware(
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
-# Add custom middlewares - order matters: CORS headers middleware first, then file size
-app.add_middleware(CORSHeadersMiddleware)
+# Add custom middleware (CORS managed above; only file size custom middleware needed)
 app.add_middleware(FileSizeMiddleware, max_upload_size=2 * 1024 * 1024 * 1024)  # 2GB limit
 
 # Request logging middleware
