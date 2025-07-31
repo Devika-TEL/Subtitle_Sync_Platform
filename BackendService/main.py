@@ -789,13 +789,27 @@ async def register_user(user_data: UserCreate):
     cursor = conn.cursor()
     
     try:
-        # In production, hash the password properly
-        password_hash = f"hashed_{user_data.password}"  # Mock hashing
+        # Hash the password using the UserAuth utility
+        from auth import UserAuth
+        
+        # Validate password strength
+        password_validation = UserAuth.validate_password_strength(user_data.password)
+        if not password_validation["is_valid"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Password does not meet security requirements",
+                    "issues": password_validation["issues"]
+                }
+            )
+        
+        # Hash the password
+        password_hash = UserAuth.hash_password(user_data.password)
         
         cursor.execute("""
             INSERT INTO users (username, password_hash, email, role)
             VALUES (?, ?, ?, ?)
-        """, (user_data.username, password_hash, user_data.email, user_data.role))
+        """, (user_data.username, password_hash, user_data.email, "user"))  # Force regular user role
         
         user_id = cursor.lastrowid
         conn.commit()

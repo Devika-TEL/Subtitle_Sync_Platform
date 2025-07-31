@@ -24,8 +24,28 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin }) => {
       setError('Passwords do not match');
       return false;
     }
-    if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters long');
+    // Password validation rules
+    const password = formData.password;
+    const validationErrors = [];
+    
+    if (password.length < 8) {
+      validationErrors.push('Password must be at least 8 characters long');
+    }
+    if (!/[a-z]/.test(password)) {
+      validationErrors.push('Password must contain lowercase letters');
+    }
+    if (!/[A-Z]/.test(password)) {
+      validationErrors.push('Password must contain uppercase letters');
+    }
+    if (!/[0-9]/.test(password)) {
+      validationErrors.push('Password must contain numbers');
+    }
+    if (!/[!@#$%^&*()_+\-=[\]{};:,.<>?]/.test(password)) {
+      validationErrors.push('Password must contain special characters');
+    }
+    
+    if (validationErrors.length > 0) {
+      setError(validationErrors.join('\n'));
       return false;
     }
     return true;
@@ -50,10 +70,19 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin }) => {
       localStorage.setItem('authToken', result.token);
       onRegisterSuccess(result.user);
     } catch (err) {
-      setError(
-        err.response?.data?.message || 
-        'Registration failed. Please try again.'
-      );
+      const errorDetail = err.response?.data?.detail;
+      if (typeof errorDetail === 'object' && errorDetail.issues) {
+        // Show specific password validation issues
+        setError(errorDetail.issues.join('\n'));
+      } else if (errorDetail === "Username already exists") {
+        setError('Username is already taken. Please choose another.');
+      } else {
+        setError(
+          err.response?.data?.message || 
+          errorDetail ||
+          'Registration failed. Please try again.'
+        );
+      }
     } finally {
       setLoading(false);
     }
