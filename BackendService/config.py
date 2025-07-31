@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     
     # Server settings
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 3001
     reload: bool = False
     
     @validator('port', pre=True)
