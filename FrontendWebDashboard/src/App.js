@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import './App.css';
 
 // Components
 import Notification from './components/Notification';
 import ProgressTracker from './components/ProgressTracker';
-import Register from './components/Register/Register';
+import SubtitleEditor from './components/SubtitleEditor/SubtitleEditor';
+import NotificationSystem from './components/NotificationSystem/NotificationSystem';
+import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
+import AuthPage from './components/AuthPage/AuthPage';
+
+// Contexts
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 // Services
 import { 
@@ -13,8 +19,7 @@ import {
   correctSubtitles,
   getSubtitleFiles,
   downloadSubtitleFile,
-  requestTranslation,
-  authenticateUser
+  requestTranslation
 } from './services/api';
 
 // Utils
@@ -57,7 +62,11 @@ const Dashboard = () => {
   
   // Debug state for development
   const [debugInfo, setDebugInfo] = useState(null);
-  const [showDebug, setShowDebug] = useState(process.env.NODE_ENV === 'development');
+  const showDebug = process.env.NODE_ENV === 'development';
+  
+  // Subtitle editor state
+  const [showSubtitleEditor, setShowSubtitleEditor] = useState(false);
+  const [editorFiles, setEditorFiles] = useState({ video: null, subtitle: null });
 
   // Load subtitle files on component mount
   useEffect(() => {
@@ -322,6 +331,52 @@ const Dashboard = () => {
     }
   };
 
+  // Subtitle editor handlers
+  const handleEditSubtitle = (file) => {
+    setEditorFiles({ 
+      video: null, // Could be enhanced to link with associated video
+      subtitle: file 
+    });
+    setShowSubtitleEditor(true);
+  };
+
+  const handleOpenEditor = () => {
+    // Open editor with current workflow files
+    if (activeTab === 'correction' && correctionFiles.video && correctionFiles.subtitle) {
+      setEditorFiles({
+        video: correctionFiles.video,
+        subtitle: correctionFiles.subtitle
+      });
+      setShowSubtitleEditor(true);
+    } else if (activeTab === 'generation' && generationFile) {
+      setEditorFiles({
+        video: generationFile,
+        subtitle: null
+      });
+      setShowSubtitleEditor(true);
+    } else {
+      showNotification('Please select files first before opening the editor', 'warning');
+    }
+  };
+
+  const handleEditorSave = (subtitleContent) => {
+    // Create a blob and download the edited subtitle
+    const blob = new Blob([subtitleContent], { type: 'text/plain' });
+    const filename = editorFiles.subtitle ? 
+      `edited_${editorFiles.subtitle.name}` : 
+      'edited_subtitles.srt';
+    downloadBlob(blob, filename);
+    
+    showNotification('Subtitle file saved successfully!', 'success');
+    setShowSubtitleEditor(false);
+    loadSubtitleFiles(); // Refresh file list
+  };
+
+  const handleEditorClose = () => {
+    setShowSubtitleEditor(false);
+    setEditorFiles({ video: null, subtitle: null });
+  };
+
   // Job completion handlers
   const handleJobComplete = (jobStatus) => {
     showNotification('Processing completed successfully!', 'success');
@@ -387,6 +442,14 @@ const Dashboard = () => {
             </div>
             
             <div className="header-actions">
+              <button
+                className="header-btn editor-btn"
+                onClick={handleOpenEditor}
+                title="Open Subtitle Editor"
+              >
+                <span className="btn-icon">✏️</span>
+                <span>Editor</span>
+              </button>
               <button
                 className={`header-btn files-btn ${showFileManager ? 'active' : ''}`}
                 onClick={() => setShowFileManager(!showFileManager)}
@@ -501,6 +564,14 @@ const Dashboard = () => {
                         </div>
                         
                         <div className="file-actions">
+                          <button
+                            className="action-btn secondary"
+                            onClick={() => handleEditSubtitle(file)}
+                            title="Edit subtitle"
+                          >
+                            <span>✏️</span>
+                            Edit
+                          </button>
                           <button
                             className="action-btn primary"
                             onClick={() => handleDownloadFile(file.id, file.filename)}
@@ -756,118 +827,27 @@ const Dashboard = () => {
           </div>
         </div>
       </footer>
+
+      {/* Subtitle Editor Modal */}
+      {showSubtitleEditor && (
+        <SubtitleEditor
+          videoFile={editorFiles.video}
+          subtitleFile={editorFiles.subtitle}
+          onSave={handleEditorSave}
+          onClose={handleEditorClose}
+        />
+      )}
     </div>
   );
 };
 
-// Wrapper components to use navigation hooks
-const LoginWrapper = ({ onLogin }) => {
-  const navigate = useNavigate();
-  
-  return (
-    <LoginForm 
-      onLogin={onLogin}
-      onSwitchToRegister={() => navigate('/register')}
-    />
-  );
-};
 
-const RegisterWrapper = ({ onRegisterSuccess }) => {
-  const navigate = useNavigate();
-  
-  return (
-    <Register 
-      onRegisterSuccess={onRegisterSuccess}
-      onSwitchToLogin={() => navigate('/login')}
-    />
-  );
-};
 
-// Auth Components
-const LoginForm = ({ onLogin, onSwitchToRegister }) => {
-  const [credentials, setCredentials] = useState({ email: '', password: '' });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
 
-    try {
-      const result = await authenticateUser(credentials.email, credentials.password);
-      localStorage.setItem('authToken', result.token);
-      onLogin(result.user);
-    } catch (err) {
-      setError('Invalid credentials. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="auth-container">
-      <form className="auth-form" onSubmit={handleSubmit}>
-        <h2>Login</h2>
-        {error && <div className="auth-error">{error}</div>}
-        <input
-          type="email"
-          placeholder="Email"
-          value={credentials.email}
-          onChange={(e) => setCredentials({...credentials, email: e.target.value})}
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={credentials.password}
-          onChange={(e) => setCredentials({...credentials, password: e.target.value})}
-          required
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Logging in...' : 'Login'}
-        </button>
-        <div className="auth-footer">
-          <p>
-            Don't have an account?{' '}
-            <button
-              type="button"
-              className="link-button"
-              onClick={onSwitchToRegister}
-              disabled={loading}
-            >
-              Sign Up
-            </button>
-          </p>
-        </div>
-      </form>
-    </div>
-  );
-};
-
-// Main App Component
-const App = () => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    // Check for existing auth token
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      // In a real app, verify the token with the backend
-      setUser({ token });
-    }
-    setLoading(false);
-  }, []);
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
-
-  const handleRegisterSuccess = (userData) => {
-    // Auto-login after successful registration
-    setUser(userData);
-  };
+// Main App Component with Authentication
+const AppContent = () => {
+  const { user, loading } = useAuth();
 
   if (loading) {
     return <div className="loading-spinner">Loading...</div>;
@@ -879,20 +859,32 @@ const App = () => {
         <Routes>
           <Route 
             path="/" 
-            element={<Dashboard />} 
+            element={user ? <Dashboard /> : <AuthPage />} 
           />
           <Route 
             path="/login" 
-            element={<Navigate to="/" replace />} 
+            element={!user ? <AuthPage /> : <Navigate to="/" replace />} 
           />
           <Route 
             path="/register" 
-            element={<Navigate to="/" replace />} 
+            element={!user ? <AuthPage mode="register" /> : <Navigate to="/" replace />} 
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <NotificationSystem />
       </div>
     </Router>
+  );
+};
+
+// Main App Component with Providers
+const App = () => {
+  return (
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 };
 

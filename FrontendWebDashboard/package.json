@@ -1,7 +1,29 @@
 {
-  "name": "react-kavia",
-  "version": "0.1.0",
+  "name": "subtitlesync-frontend",
+  "version": "1.0.0",
+  "description": "AI-powered subtitle processing platform - React frontend",
+  "homepage": ".",
   "private": true,
+  "keywords": [
+    "subtitles",
+    "video-processing",
+    "ai",
+    "react",
+    "multimedia",
+    "accessibility"
+  ],
+  "author": {
+    "name": "SubtitleSync Team",
+    "email": "support@subtitlesync.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/subtitlesync/frontend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/subtitlesync/frontend/issues"
+  },
   "dependencies": {
     "axios": "^1.6.0",
     "react": "^18.2.0",
@@ -13,16 +35,37 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "test:coverage": "react-scripts test --coverage --watchAll=false",
+    "test:ci": "cross-env CI=true react-scripts test --coverage --watchAll=false",
+    "eject": "react-scripts eject",
+    "analyze": "cross-env REACT_APP_ANALYZE_BUNDLE=true npm run build",
+    "serve": "npx serve -s build -l 3000",
+    "lint": "eslint src/**/*.{js,jsx}",
+    "lint:fix": "eslint src/**/*.{js,jsx} --fix",
+    "format": "prettier --write src/**/*.{js,jsx,css,md}",
+    "format:check": "prettier --check src/**/*.{js,jsx,css,md}",
+    "type-check": "tsc --noEmit",
+    "build:analyze": "npm run build && npx bundle-analyzer build/static/js/*.js",
+    "clean": "rm -rf build node_modules/.cache",
+    "precommit": "npm run lint && npm run format:check && npm run test:ci"
   },
   "eslintConfig": {
-    "extends": "react-app"
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ],
+    "rules": {
+      "no-unused-vars": "warn",
+      "no-console": "off",
+      "react-hooks/exhaustive-deps": "warn"
+    }
   },
   "browserslist": {
     "production": [
       ">0.2%",
       "not dead",
-      "not op_mini all"
+      "not op_mini all",
+      "not ie <= 11"
     ],
     "development": [
       "last 1 chrome version",
@@ -32,6 +75,30 @@
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.4",
-    "cross-env": "^7.0.3"
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^14.6.1",
+    "cross-env": "^7.0.3",
+    "prettier": "^2.8.8"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "jest": {
+    "collectCoverageFrom": [
+      "src/**/*.{js,jsx}",
+      "!src/index.js",
+      "!src/setupTests.js",
+      "!src/**/*.test.{js,jsx}",
+      "!src/**/*.spec.{js,jsx}"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 70,
+        "lines": 70,
+        "statements": 70
+      }
+    }
   }
 }

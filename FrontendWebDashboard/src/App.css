@@ -227,6 +227,17 @@ body {
   box-shadow: var(--shadow-lg);
 }
 
+.editor-btn {
+  background: var(--secondary-gradient);
+  color: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.editor-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
 .files-btn.active {
   background: var(--success-gradient);
 }

@@ -1,0 +1,194 @@
+/* Notification System Styles */
+.notification-system {
+  position: fixed;
+  top: var(--space-6);
+  right: var(--space-6);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 400px;
+  width: 100%;
+  pointer-events: none;
+}
+
+.notification-item {
+  background: var(--white);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-xl);
+  border-left: 4px solid var(--gray-400);
+  transform: translateX(100%);
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  pointer-events: auto;
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+.notification-item.visible {
+  transform: translateX(0);
+}
+
+.notification-item.removing {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+/* Notification Types */
+.notification-item.success {
+  border-left-color: var(--success);
+  background: linear-gradient(135deg, rgba(78, 205, 196, 0.1) 0%, var(--white) 20%);
+}
+
+.notification-item.error {
+  border-left-color: var(--error);
+  background: linear-gradient(135deg, rgba(245, 101, 101, 0.1) 0%, var(--white) 20%);
+}
+
+.notification-item.warning {
+  border-left-color: var(--warning);
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.1) 0%, var(--white) 20%);
+}
+
+.notification-item.info {
+  border-left-color: var(--primary);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, var(--white) 20%);
+}
+
+.notification-content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.notification-icon {
+  font-size: var(--font-size-xl);
+  flex-shrink: 0;
+  margin-top: var(--space-1);
+}
+
+.notification-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-title {
+  font-weight: 700;
+  font-size: var(--font-size-base);
+  color: var(--gray-800);
+  margin-bottom: var(--space-1);
+  line-height: 1.4;
+}
+
+.notification-message {
+  font-size: var(--font-size-sm);
+  color: var(--gray-700);
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.notification-details {
+  font-size: var(--font-size-xs);
+  color: var(--gray-500);
+  margin-top: var(--space-2);
+  line-height: 1.4;
+}
+
+.notification-close {
+  background: none;
+  border: none;
+  color: var(--gray-400);
+  font-size: var(--font-size-xl);
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--border-radius-sm);
+  transition: all var(--transition-base);
+  flex-shrink: 0;
+}
+
+.notification-close:hover {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.notification-progress {
+  height: 3px;
+  background: var(--gray-200);
+  overflow: hidden;
+}
+
+.notification-progress-bar {
+  height: 100%;
+  background: var(--primary-gradient);
+  transition: width 0.3s ease;
+}
+
+.notification-item.success .notification-progress-bar {
+  background: var(--success-gradient);
+}
+
+.notification-item.error .notification-progress-bar {
+  background: var(--error-gradient);
+}
+
+.notification-item.warning .notification-progress-bar {
+  background: var(--warning-gradient);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .notification-system {
+    top: var(--space-4);
+    right: var(--space-4);
+    left: var(--space-4);
+    max-width: none;
+  }
+  
+  .notification-content {
+    padding: var(--space-3);
+  }
+  
+  .notification-message {
+    font-size: var(--font-size-xs);
+  }
+}
+
+@media (max-width: 480px) {
+  .notification-system {
+    top: var(--space-3);
+    right: var(--space-3);
+    left: var(--space-3);
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .notification-item {
+    transition: opacity 0.2s ease;
+  }
+  
+  .notification-item.visible {
+    transform: none;
+  }
+  
+  .notification-item.removing {
+    transform: none;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .notification-item {
+    border: 2px solid var(--gray-800);
+    box-shadow: none;
+  }
+  
+  .notification-close {
+    border: 1px solid var(--gray-600);
+  }
+}
