@@ -1,5 +1,6 @@
 """
 Application startup script for the Subtitle Sync Platform Backend
+
 """
 
 import uvicorn
@@ -104,14 +105,29 @@ class BackendApplication:
             # Startup
             await self.startup()
             
-            # Start uvicorn server
+            # Start uvicorn server with increased limits for large file uploads
             config = uvicorn.Config(
                 "main:app",
                 host=self.config.settings.host,
                 port=self.config.settings.port,
                 reload=self.config.settings.reload,
                 log_level=self.config.settings.log_level.lower(),
-                access_log=True
+                access_log=True,
+                limit_max_requests=1000,
+                limit_concurrency=1000,
+                timeout_keep_alive=120,  # Increased for large uploads
+                timeout_graceful_shutdown=60,
+                # Critical settings for large file uploads (2GB+)
+                http="h11",  # Use h11 for better large file handling
+                ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
+                h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
+                # Add additional timeout and size limits
+                server_header=False,
+                date_header=True,
+                # Request body size limit (2GB)
+                loop="asyncio",
+                # Increase timeout for slow clients uploading large files
+                client_timeout=300,  # 5 minutes for large uploads
             )
             
             server = uvicorn.Server(config)
@@ -128,7 +144,7 @@ class BackendApplication:
 # PUBLIC_INTERFACE
 def run_development_server():
     """
-    Run development server with hot reload
+    Run development server with hot reload and large file upload support
     """
     config = get_config()
     
@@ -138,7 +154,19 @@ def run_development_server():
         port=config.settings.port,
         reload=True,
         log_level="debug",
-        access_log=True
+        access_log=True,
+        limit_max_requests=1000,
+        limit_concurrency=1000,
+        timeout_keep_alive=120,  # Increased for large uploads
+        timeout_graceful_shutdown=60,
+        # Critical settings for large file uploads during development
+        http="h11",  # Use h11 for better stability with large files
+        ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
+        h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
+        # Add client timeout for large uploads
+        server_header=False,
+        date_header=True,
+        loop="asyncio",
     )
 
 # PUBLIC_INTERFACE
@@ -167,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", 
         type=int, 
-        default=8000,
+        default=int(os.getenv("PORT", 8000)),
         help="Port to bind to"
     )
     

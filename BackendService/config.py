@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     port: int = 8000
     reload: bool = False
     
+    @validator('port', pre=True)
+    def parse_port(cls, v):
+        """Parse port from environment variable"""
+        if isinstance(v, str):
+            return int(v)
+        return int(os.getenv("PORT", v))
+    
+    @validator('host', pre=True)
+    def parse_host(cls, v):
+        """Parse host from environment variable"""
+        return os.getenv("HOST", v)
+    
     # Database settings
     database_path: str = "../Database/subtitle_sync_platform.db"
     database_url: Optional[str] = None
@@ -36,7 +48,7 @@ class Settings(BaseSettings):
     # File storage settings
     upload_dir: str = "uploads"
     processed_dir: str = "processed"
-    max_file_size_mb: int = 500
+    max_file_size_mb: int = 2048  # Increased to 2GB for large video files
     allowed_video_extensions: list = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"]
     allowed_subtitle_extensions: list = [".srt", ".vtt", ".ass", ".ssa", ".scc", ".sub", ".smi", ".sami"]
     
@@ -54,7 +66,12 @@ class Settings(BaseSettings):
     # CORS settings
     cors_origins: list = [
         "http://localhost:3000",
-        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000"
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",
+        "https://*.beta01.cloud.kavia.ai:3002"
     ]
     
     # Logging settings
