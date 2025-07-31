@@ -22,10 +22,49 @@ function getApiBase() {
   return base.replace(/\/+$/, "");
 }
 
+/**
+ * PUBLIC_INTERFACE
+ * Main application shell for Subtitle Sync Platform dashboard.
+ * Shows basic UI and highlights configuration/bootstrap errors.
+ */
 function App() {
   const apiBase = getApiBase();
-  // ... (Omitted: the rest of the actual dashboard app logic and components; keep as in the previous file content)
-  // All main application code continues as originally, after this section.
+  // Basic state for any errors or config problems
+  const [appError, setAppError] = useState(null);
+
+  // Example check: Warn if API base URL is empty or malformed
+  useEffect(() => {
+    if (!apiBase || typeof apiBase !== "string" || !/^https?:\/\/.+/i.test(apiBase)) {
+      setAppError("API base URL is missing or malformed. Please check REACT_APP_API_BASE in your .env or deployment.");
+    }
+  }, [apiBase]);
+
+  // Render main dashboard UI or error
+  return (
+    <div style={{ minHeight: "100vh", background: "#f8f9fb", color: "#222", padding: "2em" }}>
+      <header>
+        <h1>Subtitle Sync Platform Dashboard</h1>
+        <div style={{ fontSize: "1rem", color: "#555" }}>
+          Backend API: <strong>{apiBase}</strong>
+        </div>
+      </header>
+
+      {appError ? (
+        <div style={{ color: "red", margin: "2em 0", fontWeight: "bold", fontSize: "1.2em" }}>
+          Startup Error: {appError}
+        </div>
+      ) : (
+        <main style={{ marginTop: "2em" }}>
+          {/* Replace this section with the main dashboard UI */}
+          <p>
+            Welcome to the Subtitle Sync Platform dashboard!
+            <br />
+            <em>This is a visible placeholder. If you see this message, the frontend is bootstrapping correctly.</em>
+          </p>
+        </main>
+      )}
+    </div>
+  );
 }
 
 export default App;
