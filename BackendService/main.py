@@ -65,9 +65,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000", 
+        "http://localhost:3001",  # Add backend port for potential cross-origin requests
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000"
+        "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000"  # Add current frontend URL
     ],
     allow_credentials=True,
     allow_methods=["*"],

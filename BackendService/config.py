@@ -54,7 +54,9 @@ class Settings(BaseSettings):
     # CORS settings
     cors_origins: list = [
         "http://localhost:3000",
-        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000"
+        "http://localhost:3001",
+        "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000"
     ]
     
     # Logging settings
