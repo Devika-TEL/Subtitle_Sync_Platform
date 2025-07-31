@@ -143,6 +143,55 @@ body {
   flex-direction: column;
   gap: 2rem;
 }
+
+/* Language selector emphasis */
+.language-label {
+  margin-bottom: 1rem;
+  font-weight: 600;
+  color: var(--accent-purple);
+}
+.language-select {
+  display: block;
+  width: 220px;
+  font-size: 1.08rem;
+  padding: 0.44rem 0.5rem;
+  margin: 0.5rem 0 0.9rem 0;
+  border: 2.5px solid var(--accent-purple);
+  border-radius: 7px;
+  background: var(--gray-bg);
+  color: var(--primary-blue);
+  transition: var(--transition);
+  font-weight: 600;
+}
+
+.language-select:focus, .language-select:active {
+  outline: 2px solid var(--yellow-accent);
+  background: #fff7ee;
+  border-color: var(--yellow-accent);
+}
+
+.language-select.invalid {
+  border-color: #dc3545;
+  background: #fff2f2;
+}
+
+.required-asterisk {
+  color: #dc3545;
+  font-weight: bold;
+}
+
+.selector-error-msg {
+  color: #dc3545;
+  font-size: 0.98rem;
+  margin-left: 10px;
+  font-weight: bold;
+  margin-top: 0.35em;
+  position: absolute;
+}
+
+.language-label {
+  position: relative;
+}
 .workflow-card {
   background: var(--white);
   padding: 2.2rem 2.0rem;

@@ -1,6 +1,20 @@
 import React, { useState, useRef } from "react";
 import "./App.css";
 
+// Languages supported for subtitle generation - can be expanded
+const LANGUAGE_OPTIONS = [
+  { value: "", label: "Select language" },
+  { value: "en", label: "English" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "zh", label: "Chinese" },
+  { value: "hi", label: "Hindi" },
+  { value: "ru", label: "Russian" },
+  { value: "ar", label: "Arabic" },
+  { value: "pt", label: "Portuguese" }
+];
+
 /**
  * Subtitle Sync Platform Main Dashboard (No polling, synchronous processing).
  * After the user uploads and starts correction/generation, the file is sent to the backend, 
@@ -13,6 +27,11 @@ function App() {
   const [isCorrectionMode, setIsCorrectionMode] = useState(true);
   const [videoFile, setVideoFile] = useState(null);
   const [subtitleFile, setSubtitleFile] = useState(null);
+
+  // Language selector for generation mode
+  const [selectedLanguage, setSelectedLanguage] = useState("");
+  const [languageTouched, setLanguageTouched] = useState(false);
+
   const [processing, setProcessing] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState("");
   const [error, setError] = useState("");
@@ -28,6 +47,13 @@ function App() {
     setError("");
   };
 
+  const handleLanguageChange = (e) => {
+    setSelectedLanguage(e.target.value);
+    setLanguageTouched(true);
+    setError("");
+    setDownloadUrl("");
+  };
+
   const handleSubtitleChange = (e) => {
     setSubtitleFile(e.target.files[0]);
     setDownloadUrl("");
@@ -38,6 +64,7 @@ function App() {
   const handleProcess = async () => {
     /**
      * Uploads files to backend, waits for result, and reveals download as soon as processing is done (synchronous pattern).
+     * Requires language selection for generation workflow!
      */
     setProcessing(true);
     setError("");
@@ -49,12 +76,17 @@ function App() {
     if (isCorrectionMode && subtitleFile) {
       formData.append("subtitle", subtitleFile);
     }
+    if (!isCorrectionMode && selectedLanguage) {
+      formData.append("language", selectedLanguage);
+    }
 
     try {
-      // Use environment variable for API endpoint base
-      const endpoint = isCorrectionMode
-        ? `${process.env.REACT_APP_API_BASE}/subtitle/correct`
-        : `${process.env.REACT_APP_API_BASE}/subtitle/generate`;
+      let endpoint = "";
+      if (isCorrectionMode) {
+        endpoint = `${process.env.REACT_APP_API_BASE}/subtitle/correct`;
+      } else {
+        endpoint = `${process.env.REACT_APP_API_BASE}/subtitle/generate`;
+      }
 
       const response = await fetch(endpoint, {
         method: "POST",
@@ -89,12 +121,19 @@ function App() {
   const resetForm = () => {
     setVideoFile(null);
     setSubtitleFile(null);
+    setSelectedLanguage("");
+    setLanguageTouched(false);
     setDownloadUrl("");
     setError("");
     setProcessing(false);
     if (videoInputRef.current) videoInputRef.current.value = null;
     if (subtitleInputRef.current) subtitleInputRef.current.value = null;
   };
+
+  // Disable process button if required fields are missing
+  const canStartCorrection = videoFile && subtitleFile && !processing;
+  const canStartGeneration =
+    videoFile && selectedLanguage && !processing;
 
   return (
     <div className="App">
@@ -162,11 +201,7 @@ function App() {
                 <button
                   className="primary-button"
                   onClick={handleProcess}
-                  disabled={
-                    processing ||
-                    !videoFile ||
-                    !subtitleFile
-                  }
+                  disabled={!canStartCorrection}
                 >
                   {processing ? "Correcting..." : "Start Correction"}
                 </button>
@@ -190,11 +225,39 @@ function App() {
                   required
                 />
               </label>
+              <label className="file-label language-label">
+                Subtitles Language <span className="required-asterisk" aria-hidden="true">*</span>
+                <select
+                  className={`language-select${languageTouched && !selectedLanguage ? " invalid" : ""}`}
+                  value={selectedLanguage}
+                  onChange={handleLanguageChange}
+                  disabled={processing}
+                  required
+                  onBlur={() => setLanguageTouched(true)}
+                  aria-required="true"
+                  aria-invalid={languageTouched && !selectedLanguage ? "true" : "false"}
+                >
+                  {LANGUAGE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value} disabled={opt.value === ""}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {languageTouched && !selectedLanguage && (
+                  <span className="selector-error-msg" role="alert">
+                    Please select a language
+                  </span>
+                )}
+              </label>
               <div className="actions">
                 <button
                   className="primary-button"
-                  onClick={handleProcess}
-                  disabled={processing || !videoFile}
+                  onClick={() => {
+                    setLanguageTouched(true);
+                    if (!selectedLanguage) return;
+                    handleProcess();
+                  }}
+                  disabled={!canStartGeneration}
                 >
                   {processing ? "Generating..." : "Start Generation"}
                 </button>
