@@ -4,8 +4,7 @@ import "./App.css";
 /**
  * PUBLIC_INTERFACE
  * App Root for Subtitle Sync Platform Dashboard.
- * Provides UI to select between "Subtitle Correction" and "Subtitle Generation" workflows,
- * upload media/subtitle files, and apply branding color palette.
+ * Connects upload/workflow UI to FastAPI backend, manages uploads, job polling, and result/error display.
  */
 function App() {
   // Theme toggle
@@ -20,25 +19,23 @@ function App() {
   // Workflow selection: "correction" or "generation"
   const [workflow, setWorkflow] = useState("correction");
 
-  // Subtitle Correction State
+  // --- Correction State ---
   const [correctionVideo, setCorrectionVideo] = useState(null);
   const [correctionSub, setCorrectionSub] = useState(null);
 
-  // Subtitle Generation State
+  // --- Generation State ---
   const [generationVideo, setGenerationVideo] = useState(null);
   const [generationLang, setGenerationLang] = useState("");
 
-  // Dummy handler for submit buttons; API integration pending
-  function handleCorrectionSubmit(e) {
-    e.preventDefault();
-    alert("Correction workflow submitted (API pending).");
-  }
-  function handleGenerationSubmit(e) {
-    e.preventDefault();
-    alert("Generation workflow submitted (API pending).");
-  }
+  // --- UI/Status State ---
+  const [uploading, setUploading] = useState(false);
+  const [jobId, setJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null); // {status, message, progress, ...}
+  const [downloadLink, setDownloadLink] = useState(null);
+  const [error, setError] = useState(null);
+  const [polling, setPolling] = useState(false);
 
-  // Brand color palette for inline styling and accents
+  // Brand color palette for styling
   const brandPalette = {
     primaryBlue: "#20388F",
     accentPurple: "#A41E7E",
@@ -47,7 +44,7 @@ function App() {
     neutralWhite: "#FFFFFF",
   };
 
-  // List of available languages for generation
+  // Language options
   const languageOptions = [
     { code: "en", label: "English" },
     { code: "es", label: "Spanish" },
@@ -55,8 +52,277 @@ function App() {
     { code: "de", label: "German" },
     { code: "zh", label: "Chinese" },
     { code: "ja", label: "Japanese" },
-    // Add additional languages as required
+    // Add more languages as needed
   ];
+
+  // Reset workflow state
+  function resetAllStates() {
+    setJobId(null);
+    setJobStatus(null);
+    setDownloadLink(null);
+    setError(null);
+    setUploading(false);
+    setPolling(false);
+  }
+
+  // Correction handler (video+subtitle)
+  async function handleCorrectionSubmit(e) {
+    e.preventDefault();
+    resetAllStates();
+    if (!correctionVideo || !correctionSub) {
+      setError("Please select both video and subtitle files.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("video_file", correctionVideo);
+      formData.append("subtitle_file", correctionSub);
+
+      const resp = await fetch("/api/correction", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!resp.ok) {
+        let msg = "Server error during upload";
+        try {
+          const data = await resp.json();
+          msg = data.detail || JSON.stringify(data);
+        } catch {} // fallback to generic
+        throw new Error(msg);
+      }
+      const data = await resp.json();
+      setJobId(data.job_id);
+      setJobStatus({ status: data.status, message: data.message });
+      setUploading(false);
+      setPolling(true);
+    } catch (err) {
+      setUploading(false);
+      setError(
+        err?.message ||
+          "Failed to upload files. Please try again or check network connection."
+      );
+    }
+  }
+
+  // Generation handler (video+lang)
+  async function handleGenerationSubmit(e) {
+    e.preventDefault();
+    resetAllStates();
+    if (!generationVideo || !generationLang) {
+      setError("Please select a video and output language.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("video_file", generationVideo);
+      formData.append("language", generationLang);
+      const resp = await fetch("/api/generation", {
+        method: "POST",
+        body: formData,
+      });
+      if (!resp.ok) {
+        let msg = "Server error during upload";
+        try {
+          const data = await resp.json();
+          msg = data.detail || JSON.stringify(data);
+        } catch {}
+        throw new Error(msg);
+      }
+      const data = await resp.json();
+      setJobId(data.job_id);
+      setJobStatus({ status: data.status, message: data.message });
+      setUploading(false);
+      setPolling(true);
+    } catch (err) {
+      setUploading(false);
+      setError(
+        err?.message ||
+          "Failed to upload file. Please try again or check network connection."
+      );
+    }
+  }
+
+  // Poll job status when jobId & polling
+  useEffect(() => {
+    let pollInt = null;
+    if (jobId && polling) {
+      // Start polling
+      pollInt = setInterval(async () => {
+        try {
+          const resp = await fetch(`/api/jobs/${jobId}`);
+          if (!resp.ok) throw new Error("Could not check job status");
+          const job = await resp.json();
+          setJobStatus(job);
+
+          if (
+            job.status === "success" ||
+            job.status === "error" ||
+            job.status === "cancelled"
+          ) {
+            setPolling(false);
+            // For "success", try to get download url for output subtitle
+            if (
+              job.status === "success" &&
+              job.output_subtitle_id &&
+              job.output_subtitle_id !== null
+            ) {
+              // Try fetch subtitle record to get path/filename
+              try {
+                const subResp = await fetch(
+                  `/api/subtitles/${job.output_subtitle_id}`
+                );
+                if (subResp.ok) {
+                  const sub = await subResp.json();
+                  // For demo, expect backend to have a public static path (could be replaced with better endpoint)
+                  setDownloadLink(
+                    `/static/${getFileNameFromPath(sub.file_path)}`
+                  );
+                }
+              } catch {}
+            }
+          }
+        } catch (e) {
+          setError(
+            "Error updating job status. Please refresh or try again later."
+          );
+          setPolling(false);
+        }
+      }, 1500);
+    }
+    return () => {
+      if (pollInt) clearInterval(pollInt);
+    };
+    // eslint-disable-next-line
+  }, [jobId, polling]);
+
+  // Helper to extract filename from full path
+  function getFileNameFromPath(path) {
+    if (!path) return "";
+    return path.split("/").pop();
+  }
+
+  // Notice - clear error if any state changes
+  useEffect(() => {
+    if (error) {
+      const t = setTimeout(() => setError(null), 9000);
+      return () => clearTimeout(t);
+    }
+  }, [error]);
+
+  // Render upload/progress/result panel for workflows
+  function renderStatusPanel() {
+    // Error
+    if (error)
+      return (
+        <div
+          style={{
+            margin: "20px 0 0 0",
+            color: "#A41E7E",
+            background: "#ffe3ed",
+            border: "1.5px solid #ED4C8B",
+            padding: "10px 16px",
+            borderRadius: 9,
+            fontWeight: 500,
+          }}
+        >
+          Error: {error}
+        </div>
+      );
+    if (uploading)
+      return (
+        <div style={{ margin: "20px 0 0 0", color: brandPalette.primaryBlue }}>
+          Uploading... Please wait.
+        </div>
+      );
+    if (jobId && jobStatus) {
+      return (
+        <div
+          style={{
+            marginTop: 20,
+            background: "#f8f6fe",
+            border: "1.2px solid #a3c2fe",
+            borderRadius: 8,
+            padding: "18px 13px 9px 13px",
+          }}
+        >
+          <strong>
+            Job Status:{" "}
+            <span style={{ color: statusColor(jobStatus.status) }}>
+              {jobStatus.status?.toUpperCase() || "loading..."}
+            </span>
+          </strong>
+          <br />
+          <span>
+            {jobStatus.message ||
+              (jobStatus.status === "success"
+                ? "Complete"
+                : "Processing...")}
+          </span>
+          {jobStatus.progress !== undefined &&
+            jobStatus.status !== "success" && (
+              <ProgressBar progress={jobStatus.progress || 10} />
+            )}
+          {downloadLink && (
+            <div style={{ marginTop: 14 }}>
+              <a
+                href={downloadLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: brandPalette.secondaryPink,
+                  fontWeight: 600,
+                  textDecoration: "underline",
+                  fontSize: 17,
+                }}
+                download
+              >
+                Download Corrected/Generated Subtitle
+              </a>
+            </div>
+          )}
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // Color by job status
+  function statusColor(status) {
+    if (!status) return "#8c8ca6";
+    if (status === "pending") return brandPalette.secondaryPink;
+    if (status === "in_progress") return brandPalette.primaryBlue;
+    if (status === "success") return "#20A664"; // green
+    if (status === "error" || status === "cancelled") return "#A41E7E";
+    return "#888";
+  }
+
+  // ProgressBar: Simple filling bar component
+  function ProgressBar({ progress }) {
+    return (
+      <div
+        style={{
+          marginTop: 12,
+          width: "98%",
+          height: 14,
+          background: "#e4eafd",
+          borderRadius: 7,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: (progress || 1) + "%",
+            height: "100%",
+            background: brandPalette.primaryBlue,
+            transition: "width 0.6s cubic-bezier(.6,.1,.46,1.5)",
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="App" style={{ background: brandPalette.neutralWhite }}>
@@ -78,9 +344,7 @@ function App() {
         >
           {theme === "light" ? "🌙 Dark" : "☀️ Light"}
         </button>
-        <h1 className="dashboard-title">
-          Subtitle Sync Platform
-        </h1>
+        <h1 className="dashboard-title">Subtitle Sync Platform</h1>
         <p className="dashboard-description">
           AI-powered subtitle correction and generation for your videos. Start by selecting a workflow below.
         </p>
@@ -96,7 +360,11 @@ function App() {
               color: workflow === "correction" ? brandPalette.neutralWhite : brandPalette.primaryBlue,
               borderColor: brandPalette.primaryBlue,
             }}
-            onClick={() => setWorkflow("correction")}
+            onClick={() => {
+              setWorkflow("correction");
+              resetAllStates();
+              setCorrectionVideo(null); setCorrectionSub(null);
+            }}
             aria-selected={workflow === "correction"}
           >
             Subtitle Correction
@@ -108,7 +376,11 @@ function App() {
               color: workflow === "generation" ? brandPalette.neutralWhite : brandPalette.accentPurple,
               borderColor: brandPalette.accentPurple,
             }}
-            onClick={() => setWorkflow("generation")}
+            onClick={() => {
+              setWorkflow("generation");
+              resetAllStates();
+              setGenerationVideo(null); setGenerationLang("");
+            }}
             aria-selected={workflow === "generation"}
           >
             Subtitle Generation
@@ -145,9 +417,11 @@ function App() {
                   color: brandPalette.neutralWhite,
                   marginTop: 24,
                 }}
+                disabled={uploading}
               >
                 Submit for Correction
               </button>
+              {renderStatusPanel()}
             </form>
           )}
 
@@ -196,9 +470,11 @@ function App() {
                   color: brandPalette.primaryBlue,
                   marginTop: 24,
                 }}
+                disabled={uploading}
               >
                 Generate Subtitles
               </button>
+              {renderStatusPanel()}
             </form>
           )}
         </section>
