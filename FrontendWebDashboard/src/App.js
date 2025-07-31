@@ -54,6 +54,10 @@ const Dashboard = () => {
   
   // Translation state
   const [translationRequests, setTranslationRequests] = useState({});
+  
+  // Debug state for development
+  const [debugInfo, setDebugInfo] = useState(null);
+  const [showDebug, setShowDebug] = useState(process.env.NODE_ENV === 'development');
 
   // Load subtitle files on component mount
   useEffect(() => {
@@ -131,12 +135,23 @@ const Dashboard = () => {
     setJobId(null);
     
     try {
+      setDebugInfo({ action: 'Starting correction', files: { video: correctionFiles.video.name, subtitle: correctionFiles.subtitle.name } });
       const response = await correctSubtitles(correctionFiles.video, correctionFiles.subtitle);
+      setDebugInfo({ action: 'Correction response received', responseType: typeof response.data, responseSize: response.data?.length || 'unknown' });
       
       // Handle direct file response from backend
-      if (response.data instanceof Blob) {
+      if (response.data instanceof Blob || (response.data && typeof response.data === 'string' && response.data.includes('-->'))) {
         const filename = `corrected_${correctionFiles.subtitle.name}`;
-        downloadBlob(response.data, filename);
+        
+        // Handle both Blob and text responses
+        if (response.data instanceof Blob) {
+          downloadBlob(response.data, filename);
+        } else {
+          // Create blob from text response
+          const blob = new Blob([response.data], { type: 'text/plain' });
+          downloadBlob(blob, filename);
+        }
+        
         showNotification('Subtitle correction completed! File downloaded.', 'success');
         loadSubtitleFiles(); // Refresh file list
       } else {
@@ -145,11 +160,53 @@ const Dashboard = () => {
         showNotification('Correction job started', 'info');
       }
     } catch (error) {
-      console.error('Error processing correction:', error);
-      showNotification(
-        error.response?.data?.message || 'Failed to process correction. Please try again.',
-        'error'
-      );
+      const errorDetails = {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        code: error.code,
+        config: {
+          url: error.config?.url,
+          method: error.config?.method,
+          baseURL: error.config?.baseURL,
+          timeout: error.config?.timeout
+        }
+      };
+      
+      console.error('Correction Error Details:', errorDetails);
+      setDebugInfo({ action: 'Correction error', error: errorDetails });
+      
+      // Enhanced error message construction
+      let errorMessage = 'Failed to process correction. Please try again.';
+      
+      if (error.response) {
+        // Server responded with error status
+        if (error.response.status === 400) {
+          errorMessage = error.response.data?.detail || error.response.data?.message || 'Invalid file format or request data.';
+        } else if (error.response.status === 413) {
+          errorMessage = 'File size too large. Please use smaller files.';
+        } else if (error.response.status === 422) {
+          errorMessage = 'Invalid file format. Please check your video and subtitle files.';
+        } else if (error.response.status === 500) {
+          errorMessage = 'Server processing error. Please try again or contact support.';
+        } else if (error.response.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data?.message) {
+          errorMessage = error.response.data.message;
+        } else {
+          errorMessage = `Server error (${error.response.status}): ${error.response.statusText}`;
+        }
+      } else if (error.request) {
+        // Network error
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else if (error.code === 'ECONNABORTED') {
+        // Timeout error
+        errorMessage = 'Request timeout. The processing is taking too long. Please try with smaller files.';
+      }
+      
+      showNotification(errorMessage, 'error');
     } finally {
       setLoading(false);
     }
@@ -170,9 +227,18 @@ const Dashboard = () => {
       const response = await generateSubtitles(generationFile, generationLanguage);
       
       // Handle direct file response from backend
-      if (response.data instanceof Blob) {
+      if (response.data instanceof Blob || (response.data && typeof response.data === 'string' && response.data.includes('-->'))) {
         const filename = `generated_${generationLanguage}_${generationFile.name.replace(/\.[^/.]+$/, '.srt')}`;
-        downloadBlob(response.data, filename);
+        
+        // Handle both Blob and text responses
+        if (response.data instanceof Blob) {
+          downloadBlob(response.data, filename);
+        } else {
+          // Create blob from text response
+          const blob = new Blob([response.data], { type: 'text/plain' });
+          downloadBlob(blob, filename);
+        }
+        
         showNotification('Subtitle generation completed! File downloaded.', 'success');
         loadSubtitleFiles(); // Refresh file list
       } else {
@@ -181,11 +247,44 @@ const Dashboard = () => {
         showNotification('Generation job started', 'info');
       }
     } catch (error) {
-      console.error('Error processing generation:', error);
-      showNotification(
-        error.response?.data?.message || 'Failed to generate subtitles. Please try again.',
-        'error'
-      );
+      console.error('Generation Error Details:', {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        stack: error.stack
+      });
+      
+      // Enhanced error message construction
+      let errorMessage = 'Failed to generate subtitles. Please try again.';
+      
+      if (error.response) {
+        // Server responded with error status
+        if (error.response.status === 400) {
+          errorMessage = error.response.data?.detail || error.response.data?.message || 'Invalid video file or request data.';
+        } else if (error.response.status === 413) {
+          errorMessage = 'Video file too large. Please use a smaller file.';
+        } else if (error.response.status === 422) {
+          errorMessage = 'Invalid video format. Please check your video file.';
+        } else if (error.response.status === 500) {
+          errorMessage = 'Server processing error. Please try again or contact support.';
+        } else if (error.response.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response.data?.message) {
+          errorMessage = error.response.data.message;
+        } else {
+          errorMessage = `Server error (${error.response.status}): ${error.response.statusText}`;
+        }
+      } else if (error.request) {
+        // Network error
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else if (error.code === 'ECONNABORTED') {
+        // Timeout error
+        errorMessage = 'Request timeout. The processing is taking too long. Please try with a smaller file.';
+      }
+      
+      showNotification(errorMessage, 'error');
     } finally {
       setLoading(false);
     }
@@ -244,6 +343,33 @@ const Dashboard = () => {
           type={notification.type}
           onClose={hideNotification}
         />
+      )}
+
+      {/* Debug Panel */}
+      {showDebug && debugInfo && (
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          background: '#f0f0f0',
+          border: '1px solid #ccc',
+          padding: '10px',
+          borderRadius: '5px',
+          maxWidth: '400px',
+          fontSize: '12px',
+          zIndex: 1000
+        }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Debug Info:</div>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {JSON.stringify(debugInfo, null, 2)}
+          </pre>
+          <button 
+            onClick={() => setDebugInfo(null)}
+            style={{ marginTop: '5px', fontSize: '10px' }}
+          >
+            Clear
+          </button>
+        </div>
       )}
 
       {/* Header */}

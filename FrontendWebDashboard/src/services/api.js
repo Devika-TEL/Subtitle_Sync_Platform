@@ -3,6 +3,15 @@ import axios from 'axios';
 // Get base URL from environment variable, fallback to localhost
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
 
+// Debug logging for API configuration
+if (process.env.NODE_ENV === 'development') {
+  console.log('API Configuration:', {
+    baseURL: API_BASE_URL,
+    timeout: 300000,
+    environment: process.env.NODE_ENV
+  });
+}
+
 // Create axios instance with default config
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -31,6 +40,20 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Enhanced error logging for debugging
+    console.error('API Error Details:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      headers: error.response?.headers,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method,
+        baseURL: error.config?.baseURL
+      }
+    });
+    
     // Temporarily disabled auth redirect
     return Promise.reject(error);
   }
