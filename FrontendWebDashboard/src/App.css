@@ -11,8 +11,7 @@
   --focus-shadow: 0 0 0 2px var(--yellow-accent);
 }
 
-/* ... other styles (header, forms, etc.) remain unchanged ... */
-
+/* Body & structure */
 body {
   background: var(--gray-bg);
   font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
@@ -21,12 +20,11 @@ body {
   padding: 0;
 }
 
-/* --- Prominent Download Button --- */
+/* --- Download Button --- */
 .download-section {
   text-align: center;
   margin-top: 32px;
 }
-
 .download-btn {
   padding: 15px 40px;
   background-color: #28a745;
@@ -42,7 +40,6 @@ body {
   display: inline-block;
   margin-top: 1.2em;
 }
-
 .download-btn:hover,
 .download-btn:focus {
   background-color: #218838;
@@ -59,9 +56,8 @@ body {
 }
 
 /* Remove any status/polling UI styles from previous logic */
-/* --- End prominent download button --- */
 
-/* ******* Existing styles for structure and branding remain as before ******* */
+/* ----- Header, Tabs, and Branding ----- */
 .app-header {
   background: linear-gradient(90deg, var(--primary-blue) 60%, var(--accent-purple) 100%);
   color: var(--white);
@@ -70,7 +66,6 @@ body {
   flex-direction: column;
   align-items: center;
 }
-
 .brand-logo-container {
   display: flex;
   align-items: center;
@@ -121,7 +116,6 @@ body {
   transition: var(--transition);
   position: relative;
 }
-
 .tab-btn.active,
 .tab-btn:focus {
   color: var(--primary-blue);
@@ -144,54 +138,6 @@ body {
   gap: 2rem;
 }
 
-/* Language selector emphasis */
-.language-label {
-  margin-bottom: 1rem;
-  font-weight: 600;
-  color: var(--accent-purple);
-}
-.language-select {
-  display: block;
-  width: 220px;
-  font-size: 1.08rem;
-  padding: 0.44rem 0.5rem;
-  margin: 0.5rem 0 0.9rem 0;
-  border: 2.5px solid var(--accent-purple);
-  border-radius: 7px;
-  background: var(--gray-bg);
-  color: var(--primary-blue);
-  transition: var(--transition);
-  font-weight: 600;
-}
-
-.language-select:focus, .language-select:active {
-  outline: 2px solid var(--yellow-accent);
-  background: #fff7ee;
-  border-color: var(--yellow-accent);
-}
-
-.language-select.invalid {
-  border-color: #dc3545;
-  background: #fff2f2;
-}
-
-.required-asterisk {
-  color: #dc3545;
-  font-weight: bold;
-}
-
-.selector-error-msg {
-  color: #dc3545;
-  font-size: 0.98rem;
-  margin-left: 10px;
-  font-weight: bold;
-  margin-top: 0.35em;
-  position: absolute;
-}
-
-.language-label {
-  position: relative;
-}
 .workflow-card {
   background: var(--white);
   padding: 2.2rem 2.0rem;
@@ -204,7 +150,6 @@ body {
   transition: var(--transition);
   margin-bottom: 0.2rem;
 }
-
 .workflow-card-header {
   color: var(--accent-purple);
   font-size: 1.4rem;
@@ -231,6 +176,77 @@ input[type="file"]:focus {
   outline: 2px solid var(--secondary-pink);
 }
 
+/* Language selector emphasis */
+.language-label {
+  margin-bottom: 1rem;
+  font-weight: 600;
+  color: var(--accent-purple);
+  position: relative;
+  font-size: 1.12rem;
+}
+.language-label-title {
+  border-bottom: 3px double var(--accent-purple);
+  padding-bottom: 2px;
+  font-size: 1.24rem;
+  color: #a41e7e;
+  letter-spacing: .5px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+.emphasis-label {
+  background: #fff8ff;
+  border-radius: 6px;
+  padding: 3px 8px;
+  box-shadow: 0 0 7px #ffe9f8;
+}
+
+.language-select {
+  display: block;
+  width: 220px;
+  font-size: 1.11rem;
+  padding: 0.52rem 0.5rem;
+  margin: 0.65rem 0 1rem 0;
+  border: 2.5px solid var(--accent-purple);
+  border-radius: 7px;
+  background: var(--gray-bg);
+  color: var(--primary-blue);
+  transition: var(--transition);
+  font-weight: 600;
+}
+
+.language-select:focus, .language-select:active {
+  outline: 2px solid var(--yellow-accent);
+  background: #fff7ee;
+  border-color: var(--yellow-accent);
+}
+
+.language-select.invalid {
+  border-color: #dc3545;
+  background: #fff2f2;
+  box-shadow: 0 0 6px #ffd7da;
+}
+
+.required-asterisk {
+  color: #dc3545;
+  font-weight: bold;
+}
+
+.selector-error-msg {
+  color: #dc3545;
+  font-size: 0.98rem;
+  margin-left: 10px;
+  font-weight: bold;
+  margin-top: 0.3em;
+  position: absolute;
+}
+
+.actions {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+/* Buttons */
 .primary-button {
   padding: 0.8rem 2rem;
   background: linear-gradient(93deg, var(--primary-blue) 51%, var(--accent-purple) 98%);
@@ -243,6 +259,11 @@ input[type="file"]:focus {
   transition: var(--transition);
   margin-top: 0.9rem;
   box-shadow: 0 4px 18px 0 rgba(31, 56, 143, 0.11);
+}
+.primary-button:disabled {
+  background: #bbb;
+  color: #fff;
+  cursor: not-allowed;
 }
 .primary-button:hover,
 .primary-button:focus {

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import "./App.css";
 
-// Languages supported for subtitle generation - can be expanded
+// Languages supported for subtitle generation
 const LANGUAGE_OPTIONS = [
   { value: "", label: "Select language" },
   { value: "en", label: "English" },
@@ -16,10 +16,9 @@ const LANGUAGE_OPTIONS = [
 ];
 
 /**
- * Subtitle Sync Platform Main Dashboard (No polling, synchronous processing).
- * After the user uploads and starts correction/generation, the file is sent to the backend, 
- * which immediately returns the corrected/generated file or its download URL. The download 
- * button or link is shown as soon as the API responds.
+ * Subtitle Sync Platform Main Dashboard
+ * Provides two workflows: Subtitle Correction, Subtitle Generation.
+ * Language selection is required and visually prominent in the Generation workflow.
  */
 // PUBLIC_INTERFACE
 function App() {
@@ -63,8 +62,7 @@ function App() {
   // PUBLIC_INTERFACE
   const handleProcess = async () => {
     /**
-     * Uploads files to backend, waits for result, and reveals download as soon as processing is done (synchronous pattern).
-     * Requires language selection for generation workflow!
+     * Uploads files to backend (synchronous). Requires language for generation workflow.
      */
     setProcessing(true);
     setError("");
@@ -97,7 +95,6 @@ function App() {
         throw new Error("Processing failed. Please try again.");
       }
 
-      // Accept either blob (file) or JSON { download_url: ... }
       const contentType = response.headers.get("Content-Type") || "";
       let url = "";
       if (contentType.includes("application/json")) {
@@ -105,7 +102,6 @@ function App() {
         url = data.download_url;
         if (!url) throw new Error("No download URL in response.");
       } else {
-        // File (blob)
         const blob = await response.blob();
         url = window.URL.createObjectURL(blob);
       }
@@ -132,8 +128,7 @@ function App() {
 
   // Disable process button if required fields are missing
   const canStartCorrection = videoFile && subtitleFile && !processing;
-  const canStartGeneration =
-    videoFile && selectedLanguage && !processing;
+  const canStartGeneration = videoFile && selectedLanguage && !processing;
 
   return (
     <div className="App">
@@ -142,7 +137,9 @@ function App() {
           <span className="brand-logo">🎬</span>
           <span className="brand-title">Subtitle Sync Platform</span>
         </div>
-        <div className="brand-subtitle">AI-powered Subtitle Correction & Generation</div>
+        <div className="brand-subtitle">
+          AI-powered Subtitle Correction & Generation
+        </div>
       </header>
       <nav className="tab-nav" aria-label="Workflow Navigation">
         <button
@@ -225,8 +222,11 @@ function App() {
                   required
                 />
               </label>
-              <label className="file-label language-label">
-                Subtitles Language <span className="required-asterisk" aria-hidden="true">*</span>
+              <label className="file-label language-label emphasis-label">
+                <span className="language-label-title">
+                  Subtitles Language
+                </span>{" "}
+                <span className="required-asterisk" aria-hidden="true">*</span>
                 <select
                   className={`language-select${languageTouched && !selectedLanguage ? " invalid" : ""}`}
                   value={selectedLanguage}
@@ -269,8 +269,6 @@ function App() {
             </div>
           )}
         </section>
-
-        {/* Download button shown as soon as backend responds */}
         {downloadUrl && (
           <section className="download-section" aria-live="polite">
             <a
