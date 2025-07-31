@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Fix Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 20px; border: 1px solid #ccc; }
+        .result { margin: 10px 0; padding: 10px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        button { padding: 10px 20px; margin: 5px; }
+        input[type="file"] { margin: 10px 0; }
+        #results { min-height: 100px; }
+    </style>
+</head>
+<body>
+    <h1>Frontend Fix Test</h1>
+    
+    <div class="test-section">
+        <h2>Test API Connection</h2>
+        <button onclick="testConnection()">Test Backend Connection</button>
+        <div id="connection-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test File Upload Simulation</h2>
+        <input type="file" id="videoFile" accept="video/*">
+        <input type="file" id="subtitleFile" accept=".srt,.vtt,.ass,.ssa">
+        <br>
+        <button onclick="testCorrection()">Test Correction</button>
+        <button onclick="testGeneration()">Test Generation</button>
+        <div id="upload-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Results</h2>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000';
+        
+        function logResult(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${message}`;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+        
+        async function testConnection() {
+            const resultDiv = document.getElementById('connection-result');
+            resultDiv.innerHTML = 'Testing connection...';
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="success">✅ Connection successful: ${data.message}</div>`;
+                    logResult('Backend connection test passed', 'success');
+                } else {
+                    resultDiv.innerHTML = `<div class="error">❌ Connection failed: ${response.status}</div>`;
+                    logResult(`Backend connection failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ Connection error: ${error.message}</div>`;
+                logResult(`Connection error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testCorrection() {
+            const videoFile = document.getElementById('videoFile').files[0];
+            const subtitleFile = document.getElementById('subtitleFile').files[0];
+            const resultDiv = document.getElementById('upload-result');
+            
+            if (!videoFile || !subtitleFile) {
+                resultDiv.innerHTML = '<div class="error">❌ Please select both video and subtitle files</div>';
+                return;
+            }
+            
+            resultDiv.innerHTML = 'Testing correction...';
+            logResult('Starting correction test', 'info');
+            
+            try {
+                const formData = new FormData();
+                formData.append('video', videoFile);
+                formData.append('subtitle', subtitleFile);
+                
+                const response = await fetch(`${API_BASE_URL}/process`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                logResult(`Response status: ${response.status}`, 'info');
+                logResult(`Response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`, 'info');
+                
+                if (response.ok) {
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/octet-stream')) {
+                        const blob = await response.blob();
+                        resultDiv.innerHTML = `<div class="success">✅ Correction successful! File size: ${blob.size} bytes</div>`;
+                        logResult(`Correction successful! Received file of ${blob.size} bytes`, 'success');
+                        
+                        // Create download link
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `corrected_${subtitleFile.name}`;
+                        a.textContent = 'Download corrected file';
+                        resultDiv.appendChild(document.createElement('br'));
+                        resultDiv.appendChild(a);
+                    } else {
+                        const text = await response.text();
+                        resultDiv.innerHTML = `<div class="success">✅ Correction successful! Response: ${text.substring(0, 100)}...</div>`;
+                        logResult(`Correction successful! Received text response`, 'success');
+                    }
+                } else {
+                    const errorText = await response.text();
+                    resultDiv.innerHTML = `<div class="error">❌ Correction failed: ${response.status} - ${errorText}</div>`;
+                    logResult(`Correction failed: ${response.status} - ${errorText}`, 'error');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+                logResult(`Correction error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testGeneration() {
+            const videoFile = document.getElementById('videoFile').files[0];
+            const resultDiv = document.getElementById('upload-result');
+            
+            if (!videoFile) {
+                resultDiv.innerHTML = '<div class="error">❌ Please select a video file</div>';
+                return;
+            }
+            
+            resultDiv.innerHTML = 'Testing generation...';
+            logResult('Starting generation test', 'info');
+            
+            try {
+                const formData = new FormData();
+                formData.append('video', videoFile);
+                formData.append('language', 'en');
+                
+                const response = await fetch(`${API_BASE_URL}/process`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                logResult(`Response status: ${response.status}`, 'info');
+                
+                if (response.ok) {
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/octet-stream')) {
+                        const blob = await response.blob();
+                        resultDiv.innerHTML = `<div class="success">✅ Generation successful! File size: ${blob.size} bytes</div>`;
+                        logResult(`Generation successful! Received file of ${blob.size} bytes`, 'success');
+                        
+                        // Create download link
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `generated_${videoFile.name.replace(/\.[^/.]+$/, '.srt')}`;
+                        a.textContent = 'Download generated file';
+                        resultDiv.appendChild(document.createElement('br'));
+                        resultDiv.appendChild(a);
+                    } else {
+                        const text = await response.text();
+                        resultDiv.innerHTML = `<div class="success">✅ Generation successful! Response: ${text.substring(0, 100)}...</div>`;
+                        logResult(`Generation successful! Received text response`, 'success');
+                    }
+                } else {
+                    const errorText = await response.text();
+                    resultDiv.innerHTML = `<div class="error">❌ Generation failed: ${response.status} - ${errorText}</div>`;
+                    logResult(`Generation failed: ${response.status} - ${errorText}`, 'error');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+                logResult(`Generation error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Auto-test connection on load
+        window.onload = function() {
+            logResult('Frontend Fix Test loaded', 'info');
+            testConnection();
+        };
+    </script>
+</body>
+</html>
