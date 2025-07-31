@@ -627,25 +627,15 @@ const App = () => {
         <Routes>
           <Route 
             path="/" 
-            element={
-              user ? <Dashboard /> : <Navigate to="/login" replace />
-            } 
+            element={<Dashboard />} 
           />
           <Route 
             path="/login" 
-            element={
-              user ? <Navigate to="/" replace /> : (
-                <LoginWrapper onLogin={handleLogin} />
-              )
-            } 
+            element={<Navigate to="/" replace />} 
           />
           <Route 
             path="/register" 
-            element={
-              user ? <Navigate to="/" replace /> : (
-                <RegisterWrapper onRegisterSuccess={handleRegisterSuccess} />
-              )
-            } 
+            element={<Navigate to="/" replace />} 
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
