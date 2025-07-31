@@ -1,4 +1,4 @@
-# Subtitle Sync Platform
+ # Subtitle Sync Platform
 
 A fullstack application powered by large language models (LLMs) designed to streamline subtitle-audio synchronization and subtitle generation for videos. The application supports multiple subtitle formats and languages, ensuring a user-friendly experience for uploading videos, monitoring progress, managing subtitle files, and performing corrections.
 
