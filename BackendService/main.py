@@ -3,7 +3,7 @@ FastAPI Backend Service for Subtitle Sync Platform
 Provides comprehensive subtitle processing, validation, generation, and translation services.
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -86,7 +86,8 @@ app.add_middleware(
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",
+        "https://vscode-internal-12880-beta.beta01.cloud.kavia.ai:3001"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
@@ -1264,6 +1265,43 @@ async def process_translation_job(job_id: int, target_language: str):
         conn.commit()
     finally:
         conn.close()
+
+# PUBLIC_INTERFACE
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time communication with the Subtitle Sync Platform backend.
+    This endpoint can be used for streaming progress updates, notifications, collaborative editing,
+    or real-time status tracking.
+    - The frontend should connect with: `ws(s)://<backend-host>:<backend-port>/ws`
+    - Auth can be added with JWT in a query parameter or subprotocol.
+
+    Usage for clients:
+    - Connect using WebSocket to /ws
+    - Send a JSON object with a "type" and "payload" field, or simply raw text
+    - This starter version echoes all received messages
+
+    Returns:
+        Echoed message, or structured backend updates in future.
+
+    Swagger/OpenAPI:
+      operationId: websocket_subtitle_sync
+      tags: [ "websocket" ]
+      summary: Subtitle Sync WebSocket Endpoint
+      description: >
+          Real-time WebSocket endpoint for receiving backend processing updates and for interactive features.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # Echo for debug: in production, replace with logic to push progress etc.
+            await websocket.send_text(f"Echo: {data}")
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn
