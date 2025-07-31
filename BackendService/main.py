@@ -69,7 +69,8 @@ app.add_middleware(
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000"  # Add current frontend URL
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"  # Add new frontend URL for port 3002
     ],
     allow_credentials=True,
     allow_methods=["*"],
