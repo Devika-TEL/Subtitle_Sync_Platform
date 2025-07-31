@@ -19,6 +19,7 @@ import {
 
 // Utils
 import { downloadBlob, validateFile, formatFileSize, VIDEO_TYPES, SUBTITLE_TYPES, SUBTITLE_EXTENSIONS } from './utils/fileUtils';
+import { runApiDiagnostics } from './utils/apiTest';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -58,6 +59,8 @@ const Dashboard = () => {
   // Debug state for development
   const [debugInfo, setDebugInfo] = useState(null);
   const [showDebug, setShowDebug] = useState(process.env.NODE_ENV === 'development');
+  const [diagnosticResults, setDiagnosticResults] = useState(null);
+  const [runningDiagnostics, setRunningDiagnostics] = useState(false);
 
   // Load subtitle files on component mount
   useEffect(() => {
@@ -334,6 +337,37 @@ const Dashboard = () => {
     setJobId(null);
   };
 
+  // PUBLIC_INTERFACE
+  /**
+   * Run API diagnostics for network debugging
+   */
+  const runNetworkDiagnostics = async () => {
+    setRunningDiagnostics(true);
+    try {
+      const results = await runApiDiagnostics();
+      setDiagnosticResults(results);
+      
+      if (results.summary.allTestsPassed) {
+        showNotification('✅ All diagnostic tests passed!', 'success');
+      } else {
+        showNotification(`❌ Diagnostic issues found: ${results.summary.criticalIssues.join(', ')}`, 'error');
+      }
+    } catch (error) {
+      console.error('Diagnostic error:', error);
+      setDiagnosticResults({
+        error: error.message,
+        summary: {
+          allTestsPassed: false,
+          criticalIssues: ['Diagnostic test failed'],
+          recommendations: ['Check browser console for detailed errors']
+        }
+      });
+      showNotification('❌ Diagnostic test failed', 'error');
+    } finally {
+      setRunningDiagnostics(false);
+    }
+  };
+
   return (
     <div className="dashboard-container">
       {/* Notifications */}
@@ -372,6 +406,77 @@ const Dashboard = () => {
         </div>
       )}
 
+      {/* Diagnostic Results Panel */}
+      {showDebug && diagnosticResults && (
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          left: '10px',
+          background: diagnosticResults.summary?.allTestsPassed ? '#e8f5e8' : '#fee',
+          border: `1px solid ${diagnosticResults.summary?.allTestsPassed ? '#4caf50' : '#f44336'}`,
+          padding: '15px',
+          borderRadius: '8px',
+          maxWidth: '500px',
+          fontSize: '12px',
+          zIndex: 1000,
+          maxHeight: '400px',
+          overflowY: 'auto'
+        }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '10px', color: diagnosticResults.summary?.allTestsPassed ? '#2e7d32' : '#c62828' }}>
+            🔧 Network Diagnostics Results
+          </div>
+          
+          {diagnosticResults.summary && (
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ fontWeight: 'bold' }}>Status: {diagnosticResults.summary.allTestsPassed ? '✅ All Tests Passed' : '❌ Issues Found'}</div>
+              {diagnosticResults.summary.criticalIssues.length > 0 && (
+                <div style={{ color: '#c62828', marginTop: '5px' }}>
+                  <strong>Issues:</strong>
+                  <ul style={{ margin: '5px 0', paddingLeft: '20px' }}>
+                    {diagnosticResults.summary.criticalIssues.map((issue, idx) => (
+                      <li key={idx}>{issue}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {diagnosticResults.summary.recommendations.length > 0 && (
+                <div style={{ color: '#f57c00', marginTop: '5px' }}>
+                  <strong>Recommendations:</strong>
+                  <ul style={{ margin: '5px 0', paddingLeft: '20px' }}>
+                    {diagnosticResults.summary.recommendations.map((rec, idx) => (
+                      <li key={idx}>{rec}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+          
+          <details style={{ marginTop: '10px' }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>Full Results</summary>
+            <pre style={{ margin: '10px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '10px' }}>
+              {JSON.stringify(diagnosticResults, null, 2)}
+            </pre>
+          </details>
+          
+          <div style={{ marginTop: '10px', textAlign: 'right' }}>
+            <button 
+              onClick={() => setDiagnosticResults(null)}
+              style={{ fontSize: '10px', padding: '5px 10px' }}
+            >
+              Close
+            </button>
+            <button 
+              onClick={runNetworkDiagnostics}
+              disabled={runningDiagnostics}
+              style={{ fontSize: '10px', padding: '5px 10px', marginLeft: '5px' }}
+            >
+              Re-run
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="dashboard-header">
         <div className="container">
@@ -387,6 +492,17 @@ const Dashboard = () => {
             </div>
             
             <div className="header-actions">
+              {showDebug && (
+                <button
+                  className="header-btn diagnostic-btn"
+                  onClick={runNetworkDiagnostics}
+                  disabled={runningDiagnostics}
+                  title="Run network connectivity diagnostics"
+                >
+                  <span className="btn-icon">🔧</span>
+                  <span>{runningDiagnostics ? 'Testing...' : 'Diagnostics'}</span>
+                </button>
+              )}
               <button
                 className={`header-btn files-btn ${showFileManager ? 'active' : ''}`}
                 onClick={() => setShowFileManager(!showFileManager)}

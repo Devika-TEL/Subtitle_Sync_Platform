@@ -1,15 +1,82 @@
 import axios from 'axios';
 
-// Get base URL from environment variable, fallback to localhost:3001 (FastAPI backend)
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3001';
+// Get base URL from environment variable with cloud-aware fallback
+const getApiBaseUrl = () => {
+  // If environment variable is set, use it
+  if (process.env.REACT_APP_API_BASE_URL) {
+    return process.env.REACT_APP_API_BASE_URL;
+  }
+  
+  // Check if we're running in a cloud environment
+  if (typeof window !== 'undefined' && window.location.hostname.includes('beta01.cloud.kavia.ai')) {
+    // Extract the port from current URL and use port 3001 for backend
+    const currentUrl = new URL(window.location.href);
+    const backendUrl = `${currentUrl.protocol}//${currentUrl.hostname.replace(':3000', ':3001')}`;
+    return backendUrl;
+  }
+  
+  // Default to localhost for local development
+  return 'http://localhost:3001';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Debug logging for API configuration
 if (process.env.NODE_ENV === 'development') {
   console.log('API Configuration:', {
     baseURL: API_BASE_URL,
     timeout: 300000,
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    hostname: typeof window !== 'undefined' ? window.location.hostname : 'server',
+    isCloudEnvironment: typeof window !== 'undefined' && window.location.hostname.includes('beta01.cloud.kavia.ai')
   });
+}
+
+// Test connectivity on initialization
+const testConnectivity = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      timeout: 5000
+    });
+    if (response.ok) {
+      console.log('✅ Backend connectivity verified');
+    } else {
+      console.warn('⚠️ Backend responded but with error:', response.status);
+    }
+  } catch (error) {
+    console.error('❌ Backend connectivity failed:', error.message);
+    console.error('Trying alternative URL configurations...');
+    
+    // Try alternative URLs if main one fails
+    const alternatives = [
+      'http://localhost:3001',
+      `${window.location.protocol}//${window.location.hostname}:3001`,
+      `https://${window.location.hostname.replace(':3000', ':3001')}`
+    ];
+    
+    for (const altUrl of alternatives) {
+      try {
+        const altResponse = await fetch(`${altUrl}/`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          timeout: 3000
+        });
+        if (altResponse.ok) {
+          console.log(`✅ Alternative backend URL works: ${altUrl}`);
+          break;
+        }
+      } catch (altError) {
+        console.log(`❌ Alternative URL failed: ${altUrl}`);
+      }
+    }
+  }
+};
+
+// Run connectivity test in browser environment
+if (typeof window !== 'undefined') {
+  testConnectivity();
 }
 
 // Create axios instance with default config
@@ -50,9 +117,23 @@ api.interceptors.response.use(
       config: {
         url: error.config?.url,
         method: error.config?.method,
-        baseURL: error.config?.baseURL
-      }
+        baseURL: error.config?.baseURL,
+        timeout: error.config?.timeout
+      },
+      code: error.code,
+      network: error.request ? 'Network request made but no response received' : 'Request setup failed'
     });
+    
+    // Add specific network error handling
+    if (error.code === 'NETWORK_ERROR' || error.message.includes('Network Error')) {
+      console.error('🔥 NETWORK ERROR DETECTED:');
+      console.error('Current API_BASE_URL:', API_BASE_URL);
+      console.error('Current window.location:', typeof window !== 'undefined' ? window.location.href : 'N/A');
+      console.error('Suggested fixes:');
+      console.error('1. Check if backend is running on the correct port');
+      console.error('2. Verify CORS configuration');
+      console.error('3. Check if URL is accessible from current domain');
+    }
     
     // Temporarily disabled auth redirect
     return Promise.reject(error);

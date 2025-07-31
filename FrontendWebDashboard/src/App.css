@@ -216,6 +216,12 @@ body {
   overflow: hidden;
 }
 
+.header-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .files-btn {
   background: var(--primary-gradient);
   color: var(--white);
@@ -238,6 +244,17 @@ body {
 }
 
 .logout-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.diagnostic-btn {
+  background: var(--warning-gradient);
+  color: var(--gray-800);
+  box-shadow: var(--shadow);
+}
+
+.diagnostic-btn:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }
@@ -731,18 +748,9 @@ body {
   gap: var(--space-4);
 }
 
-.file-icon {
-  font-size: var(--font-size-2xl);
-}
-
 .file-info {
   display: flex;
   flex-direction: column;
-}
-
-.file-name {
-  font-weight: 600;
-  color: var(--primary);
 }
 
 .file-size {
@@ -856,7 +864,7 @@ body {
   box-shadow: var(--shadow);
 }
 
-.loading-spinner {
+.submit-btn .loading-spinner {
   width: 20px;
   height: 20px;
   border: 2px solid rgba(255, 255, 255, 0.3);
