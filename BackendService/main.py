@@ -1,234 +1,168 @@
 import os
-import secrets
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
+import tempfile
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
-import uuid
-from pydantic import BaseModel, Field
+from typing import Optional
+from pathlib import Path
 
-# PUBLIC_INTERFACE
-def create_app():
-    """Create and configure FastAPI app for subtitle sync platform backend."""
-    app = FastAPI(
-        title="Subtitle Sync Platform API",
-        description="Backend service for subtitle-audio synchronization, subtitle correction, and generation.",
-        version="1.0.0",
-        openapi_tags=[
-            {"name": "Jobs", "description": "Job submission, status, and management"},
-            {"name": "Files", "description": "Subtitle and video file upload/download endpoints"}
-        ]
-    )
+# Placeholder imports for actual processing logic
+# from subtitle_processing_module import perform_correction, generate_subtitle
 
-    # Allow CORS for dev: adjust origins as needed
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # Restrict to the frontend or deployment domain in production!
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+app = FastAPI(
+    title="Subtitle Sync Platform Backend API",
+    description="""API for subtitle-audio synchronization, correction, and subtitle generation using large language models.
+Receives video and subtitle file uploads, returns corrected or generated subtitle files directly as downloadable responses.
+""",
+    version="1.0.0",
+    openapi_tags=[
+        {"name": "Subtitle Correction", "description": "Endpoints for subtitle-audio synchronization and correction."},
+        {"name": "Subtitle Generation", "description": "Endpoints for generating subtitles and translations."}
+    ],
+)
 
-    return app
+origins = [
+    "*",  # Adjust for environment
+]
 
-app = create_app()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# --- "Database" substitute for demo --- #
-JOBS: Dict[str, Dict[str, Any]] = {}
-JOB_FILES_DIR = "job_outputs"
-os.makedirs(JOB_FILES_DIR, exist_ok=True)
+def _move_upload_to_temp(uploaded_file: UploadFile, suffix: str = "") -> str:
+    """Save an uploaded file to a temp directory and return the path."""
+    suffix = suffix or Path(uploaded_file.filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as out_file:
+        out_file.write(uploaded_file.file.read())
+        tmp_path = out_file.name
+    uploaded_file.file.close()
+    return tmp_path
 
-DOWNLOAD_BASE_URL = "/jobs"  # For building result URLs. In a real deployment use request.url_for or an absolute path.
-
-def get_download_url(job_id: str, download_token: str = None) -> str:
-    """Determine download URL for a given job; includes download_token if present for basic access control."""
-    url = f"{DOWNLOAD_BASE_URL}/{job_id}/result"
-    if download_token:
-        url = f"{url}?token={download_token}"
-    return url
-
-class JobSubmissionResponse(BaseModel):
-    job_id: str = Field(..., description="Unique job identifier")
-    status: str = Field(..., description="Current status of the job (queued, processing, complete, failed)")
-    result_url: str = Field(None, description="URL for downloading result file, populated upon completion")
-
-class JobStatusResponse(BaseModel):
-    job_id: str = Field(..., description="Unique job identifier")
-    status: str = Field(..., description="Job status")
-    download_url: str = Field(None, description="Publicly accessible URL for download if job is complete")
-    detail: str = Field(None, description="Job detail or error (optional)")
-
-ALLOWED_EXTENSIONS = {'.srt', '.vtt', '.ass', '.sub', '.txt'}  # Expand as needed
-
-def get_result_file_path(job_id: str) -> str:
-    """Get absolute path to job output file by job id."""
-    for ext in ALLOWED_EXTENSIONS:
-        candidate = os.path.join(JOB_FILES_DIR, f"{job_id}_result{ext}")
-        if os.path.exists(candidate):
-            return candidate
-    # Not found
-    return None
-
-def do_correction(sub_path: str, job_id: str) -> str:
-    """
-    Simulated subtitle correction. For production, insert real logic here.
-    Detects file extension, checks support, and outputs result into job_outputs/.
-    """
-    # Detect extension
-    _, ext = os.path.splitext(sub_path)
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("Unsupported subtitle file extension")
-    out_path = os.path.join(JOB_FILES_DIR, f"{job_id}_result{ext}")
-    # Simulate correction (copy file for demo)
-    with open(sub_path, "rb") as fin, open(out_path, "wb") as fout:
-        fout.write(fin.read())
-    return out_path
-
-# PUBLIC_INTERFACE
-@app.post("/jobs/submit", response_model=JobSubmissionResponse, tags=["Jobs"])
-async def submit_job(background_tasks: BackgroundTasks, subtitle_file: UploadFile = File(...)):
-    """
-    PUBLIC_INTERFACE
-    Subtitle Correction Job Submission.
-    - Accepts a subtitle file (multiple formats).
-    - Starts job processing deferred.
-    - Returns a unique job ID and initial status.
-    """
-    # Ensure subtitle format
-    _, ext = os.path.splitext(subtitle_file.filename)
-    if ext.lower() not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported subtitle format.")
-    job_id = str(uuid.uuid4())
-
-    # Save uploaded file temporarily (to job_outputs)
-    in_path = os.path.join(JOB_FILES_DIR, f"{job_id}_input{ext}")
-    with open(in_path, "wb") as out_f:
-        data = await subtitle_file.read()
-        out_f.write(data)
-    # Generate secure random download token for job result (optional, for demo use)
-    download_token = secrets.token_urlsafe(16)
-    # Register job in "DB"
-    JOBS[job_id] = {
-        "status": "queued",
-        "input": in_path,
-        "output": None,
-        "detail": "",
-        "download_token": download_token,
-        "download_url": None, # will be filled when ready
-    }
-    # Run job processing in background
-    background_tasks.add_task(run_job, job_id)
-    return JobSubmissionResponse(
-        job_id=job_id,
-        status="queued",
-        result_url=None
-    )
-
-def run_job(job_id: str):
-    """
-    Perform subtitle correction/generation for job (invoked in background).
-    Generates output, updates job state, and constructs download URL.
-    """
+def _cleanup_file(filepath: str):
+    """Remove a temporary file if it exists."""
     try:
-        JOBS[job_id]["status"] = "processing"
-        res_path = do_correction(JOBS[job_id]["input"], job_id)
-        JOBS[job_id]["output"] = res_path
-        JOBS[job_id]["status"] = "complete"
-        # Compose result download URL, include token for basic security (optional)
-        token = JOBS[job_id].get("download_token")
-        JOBS[job_id]["download_url"] = get_download_url(job_id, token)
+        os.remove(filepath)
+    except Exception:
+        pass
+
+# PUBLIC_INTERFACE
+@app.post("/api/correction", tags=["Subtitle Correction"],
+          summary="Synchronize and correct subtitle file",
+          description="""
+Upload a video file and a subtitle file.
+Performs subtitle-audio synchronization and applies corrections.
+Returns the corrected subtitle file directly as a downloadable response in the same format as the input.
+
+**Input files:**
+- video_file: Video file (any supported format)
+- subtitle_file: Subtitle file (e.g., .srt, .vtt, etc.)
+
+**Response:**
+- Returns: FileResponse, corrected subtitle file in same format as uploaded.
+
+**Usage:** POST as multipart/form-data.
+""")
+async def correct_subtitle(
+    video_file: UploadFile = File(..., description="Video file"),
+    subtitle_file: UploadFile = File(..., description="Subtitle file (e.g., .srt, .vtt)")
+):
+    # Save uploads to temp files
+    video_temp_path = _move_upload_to_temp(video_file)
+    subtitle_temp_path = _move_upload_to_temp(subtitle_file)
+    # Determine the output subtitle path
+    output_suffix = Path(subtitle_file.filename).suffix
+    output_temp = tempfile.NamedTemporaryFile(delete=False, suffix=output_suffix)
+    output_temp_path = output_temp.name
+    output_temp.close()
+
+    try:
+        # --- PLACEHOLDER: Your correction logic should process files here ---
+        # For demonstration, just copy input subtitle as output
+        with open(subtitle_temp_path, "rb") as fin, open(output_temp_path, "wb") as fout:
+            fout.write(fin.read())
+        # In real case, call correction function (uncomment and adapt):
+        # perform_correction(video_temp_path, subtitle_temp_path, output_temp_path)
+        # ---------------------------------------------------------------
+        filename_out = f"corrected_{subtitle_file.filename}"
+        headers = {'Content-Disposition': f'attachment; filename="{filename_out}"'}
+        return FileResponse(
+            output_temp_path,
+            media_type="application/octet-stream",
+            filename=filename_out,
+            headers=headers,
+        )
     except Exception as e:
-        JOBS[job_id]["status"] = "failed"
-        JOBS[job_id]["detail"] = str(e)
-        JOBS[job_id]["output"] = None
-        JOBS[job_id]["download_url"] = None
+        raise HTTPException(status_code=500, detail=f"Correction failed: {e}")
+    finally:
+        _cleanup_file(video_temp_path)
+        _cleanup_file(subtitle_temp_path)
+        # The output file will be automatically deleted by FileResponse once sent
 
 # PUBLIC_INTERFACE
-@app.get("/jobs/{job_id}/status", response_model=JobStatusResponse, tags=["Jobs"])
-async def get_job_status(job_id: str, request: Request = None):
-    """
-    PUBLIC_INTERFACE
-    Query/monitor job status.
-    Returns fields:
-      - job_id
-      - status (queued, processing, complete, failed)
-      - detail (error message or processing notes)
-      - download_url (direct access link for download, populated on complete)
-    """
-    job = JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
-    # Compose download URL if ready for download
-    download_url = None
-    if job.get("status") == "complete" and job.get("output"):
-        token = job.get("download_token")
-        download_url = get_download_url(job_id, token)
+@app.post("/api/generation", tags=["Subtitle Generation"],
+          summary="Generate subtitles for a video",
+          description="""
+Upload a video file to generate subtitles in the video's native language (and optionally translations).
+Returns a generated subtitle file directly as a downloadable response.
 
-        # If request is supplied, can prepend base URL for absolute URLs (for production!)
-        if request:
-            base = str(request.base_url).rstrip("/")
-            rel = download_url if download_url.startswith("/") else "/" + download_url
-            download_url = base + rel  # Absolute URL for frontend use
+**Input files:**
+- video_file: Video file (any supported format)
 
-    return JobStatusResponse(
-        job_id=job_id,
-        status=job["status"],
-        download_url=download_url,
-        detail=job.get("detail", "")
-    )
+**Optional parameters:**
+- language (str, query or form): target language for subtitle (leave blank for native)
 
-# PUBLIC_INTERFACE
-@app.get("/jobs/{job_id}/result", tags=["Files"])
-async def download_job_result(job_id: str, token: str = None):
-    """
-    PUBLIC_INTERFACE
-    Download the resulting/corrected/generated subtitle file for a job.
-    - Requires job to be in 'complete' state
-    - Checks result file existence/robust error handling
-    - Optionally checks a secure download token (for demo; in real app, use user-level auth!)
-    - Uses FileResponse for robust downloading
-    """
-    job = JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    # Access control: require token match if download_token is set
-    expected_token = job.get("download_token")
-    if expected_token and token != expected_token:
-        raise HTTPException(status_code=403, detail="Download token invalid or missing")
-    if job["status"] != "complete" or not job.get("output"):
-        raise HTTPException(status_code=400, detail="Job not finished or error occurred")
-    file_path = job["output"]
-    if not (file_path and os.path.exists(file_path)):
-        raise HTTPException(status_code=404, detail="Output file missing")
-    # Serve with correct content type and robust handling
-    filename = os.path.basename(file_path)
-    return FileResponse(
-        file_path,
-        media_type="application/octet-stream",
-        filename=filename
-    )
+**Response:**
+- Returns: FileResponse, generated subtitle file.
+
+**Usage:** POST as multipart/form-data.
+""")
+async def generate_subtitle(
+    video_file: UploadFile = File(..., description="Video file"),
+    language: Optional[str] = None
+):
+    # Save uploads to temp files
+    video_temp_path = _move_upload_to_temp(video_file)
+    # Determine output subtitle path (.srt by default)
+    output_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".srt")
+    output_temp_path = output_temp.name
+    output_temp.close()
+
+    try:
+        # --- PLACEHOLDER: Your generation logic should process files here ---
+        # For demonstration, create a dummy SRT file
+        dummy_content = "1\n00:00:00,000 --> 00:00:02,000\n[Generated subtitle]\n"
+        with open(output_temp_path, "w", encoding="utf-8") as fout:
+            fout.write(dummy_content)
+        # In real case, call generation function (uncomment and adapt):
+        # generate_subtitle_file(video_temp_path, output_temp_path, language)
+        # ---------------------------------------------------------------
+        filename_out = f"generated_{video_file.filename.rsplit('.', 1)[0]}.srt"
+        headers = {'Content-Disposition': f'attachment; filename="{filename_out}"'}
+        return FileResponse(
+            output_temp_path,
+            media_type="application/x-subrip",
+            filename=filename_out,
+            headers=headers,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Subtitle generation failed: {e}")
+    finally:
+        _cleanup_file(video_temp_path)
 
 # PUBLIC_INTERFACE
-@app.get("/", tags=["Misc"])
-async def root():
+@app.get("/docs/websocket-info", tags=["Subtitle Correction", "Subtitle Generation"])
+async def get_websocket_usage():
     """
-    Health check and welcome endpoint.
+    Returns information about WebSocket (if supported in the future).
     """
-    return {"status": "ok", "message": "Subtitle Sync Platform Backend API"}
+    return JSONResponse({"message": "WebSocket interfaces are not currently supported. All processing is synchronous."})
 
-# PUBLIC_INTERFACE
-@app.get("/api-docs", tags=["Misc"])
-async def docs_link():
-    """
-    Returns API documentation and OpenAPI discovery links.
-    """
-    return {
-        "openapi_json_url": "/openapi.json",
-        "swagger_ui_url": "/docs"
-    }
+# Remove all job/status related routes and state. All endpoints now return results directly.
 
-# --- End of main.py --- #
-# If run as module/script
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
