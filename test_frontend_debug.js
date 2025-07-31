@@ -37,7 +37,7 @@ async function testFrontendAPI() {
 
         // Create axios instance matching frontend config
         const api = axios.create({
-            baseURL: 'http://localhost:8000',
+            baseURL: process.env.API_BASE_URL || 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001',
             timeout: 300000, // 5 minutes
             headers: {
                 'Content-Type': 'application/json',

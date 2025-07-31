@@ -7,8 +7,8 @@ const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
 
-// Updated API base URL to use port 3001
-const API_BASE_URL = 'http://localhost:3001';
+// Updated API base URL to use new deployment URL
+const API_BASE_URL = process.env.API_BASE_URL || 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001';
 
 console.log('Testing API connectivity with fixed configuration...');
 console.log('API Base URL:', API_BASE_URL);

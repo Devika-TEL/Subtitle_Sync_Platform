@@ -76,12 +76,14 @@ app.add_middleware(
         "http://localhost:3000", 
         "http://localhost:3001",  # Backend port for potential cross-origin requests
         "http://localhost:3002",  # Local port 3002
+        # Primary deployment URLs
+        "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3000",
+        "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001",
+        "https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3002",
+        # Legacy URLs for backward compatibility
         "https://vscode-internal-33546-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-29822-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-27641-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002",  # Frontend URL for port 3002
-        # Allow all beta01.cloud.kavia.ai subdomains on common ports
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3000",
         "https://vscode-internal-32497-beta.beta01.cloud.kavia.ai:3002"
     ],

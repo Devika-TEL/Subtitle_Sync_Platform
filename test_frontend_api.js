@@ -8,8 +8,8 @@ const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
 
-// Test configuration
-const API_BASE_URL = 'http://localhost:3001';
+// Test configuration - use environment variable or default to new URL
+const API_BASE_URL = process.env.API_BASE_URL || 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001';
 const TEST_SRT_CONTENT = `1
 00:00:01,000 --> 00:00:05,000
 This is a test subtitle for frontend connectivity.

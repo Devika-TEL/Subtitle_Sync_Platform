@@ -44,9 +44,10 @@ def test_correction_endpoint():
                 'subtitle': ('test_subtitle.srt', subtitle_f, 'text/plain')
             }
             
-            # Make request to backend
+            # Make request to backend - use environment variable or default URL
+            api_url = os.environ.get('API_BASE_URL', 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001')
             response = requests.post(
-                'http://localhost:8000/process',
+                f'{api_url}/process',
                 files=files,
                 timeout=30
             )
@@ -93,8 +94,9 @@ def test_generation_endpoint():
                 'language': 'en'
             }
             
+            api_url = os.environ.get('API_BASE_URL', 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001')
             response = requests.post(
-                'http://localhost:8000/process',
+                f'{api_url}/process',
                 files=files,
                 data=data,
                 timeout=30
@@ -127,7 +129,8 @@ def test_health_check():
     print("\nTesting health check...")
     
     try:
-        response = requests.get('http://localhost:8000/', timeout=5)
+        api_url = os.environ.get('API_BASE_URL', 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001')
+        response = requests.get(f'{api_url}/', timeout=5)
         if response.status_code == 200:
             print("✅ Backend is healthy")
             print(f"Response: {response.json()}")

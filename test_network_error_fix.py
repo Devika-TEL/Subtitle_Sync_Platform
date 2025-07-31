@@ -9,7 +9,7 @@ import tempfile
 import time
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get('API_BASE_URL', 'https://vscode-internal-29910-beta.beta01.cloud.kavia.ai:3001')
 
 def create_test_files():
     """Create test files of various sizes"""
