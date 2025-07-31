@@ -167,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", 
         type=int, 
-        default=8000,
+        default=int(os.getenv("PORT", 8000)),
         help="Port to bind to"
     )
     

@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     port: int = 8000
     reload: bool = False
     
+    @validator('port', pre=True)
+    def parse_port(cls, v):
+        """Parse port from environment variable"""
+        if isinstance(v, str):
+            return int(v)
+        return int(os.getenv("PORT", v))
+    
+    @validator('host', pre=True)
+    def parse_host(cls, v):
+        """Parse host from environment variable"""
+        return os.getenv("HOST", v)
+    
     # Database settings
     database_path: str = "../Database/subtitle_sync_platform.db"
     database_url: Optional[str] = None
