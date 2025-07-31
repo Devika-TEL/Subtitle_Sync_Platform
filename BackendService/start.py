@@ -1,6 +1,8 @@
 """
 Application startup script for the Subtitle Sync Platform Backend
 
+This script ensures the FastAPI backend runs on port 3001 by default,
+to match the React frontend API expectations for /process and /ws endpoints.
 """
 
 import uvicorn
@@ -20,6 +22,7 @@ from job_processor import job_processor
 from file_utils import file_manager
 
 logger = logging.getLogger(__name__)
+
 
 class BackendApplication:
     """Backend application manager"""
@@ -144,14 +147,16 @@ class BackendApplication:
 # PUBLIC_INTERFACE
 def run_development_server():
     """
-    Run development server with hot reload and large file upload support
+    Run development server with hot reload and large file upload support.
+    The server will default to port 3001 for compatibility with the React frontend.
     """
     config = get_config()
-    
+    # Always use port 3001 unless explicitly overridden by environment/CLI
+    port = int(os.getenv("PORT", 3001))
     uvicorn.run(
         "main:app",
         host=config.settings.host,
-        port=config.settings.port,
+        port=port,
         reload=True,
         log_level="debug",
         access_log=True,
@@ -195,7 +200,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", 
         type=int, 
-        default=int(os.getenv("PORT", 8000)),
+        # Default to port 3001 for compatibility
+        default=int(os.getenv("PORT", 3001)),
         help="Port to bind to"
     )
     
