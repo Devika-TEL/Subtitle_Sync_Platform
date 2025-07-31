@@ -80,3 +80,29 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+---
+
+## Troubleshooting: "Failed to fetch" on Submit
+
+If you see a "Failed to fetch" error when submitting a correction or subtitle generation job, it usually means the frontend could not reach the backend API. This can be caused by:
+
+- The backend server is not running, or running on the wrong port/address.
+- The `REACT_APP_API_BASE` environment variable is incorrect or not set.
+- There is a CORS (cross-origin resource sharing) configuration problem.
+- Network/proxy/firewall issues.
+
+**Steps to resolve:**
+
+1. Make sure your backend server (FastAPI) is running, e.g. at http://localhost:8000.
+2. Set the correct API base URL in your frontend environment:
+   - Copy `.env.example` to `.env` in this folder.
+   - Edit `.env` and set `REACT_APP_API_BASE` to match your backend, e.g.:
+     ```
+     REACT_APP_API_BASE=http://localhost:8000
+     ```
+3. Restart the frontend dev server after changing `.env`.
+4. Visit `http://localhost:8000/api/health` in your browser to check backend status.
+5. The backend CORS settings are permissive (see FastAPI CORSMiddleware in `main.py`), but if you have customized these, ensure your frontend origin is allowed.
+
+If following these steps does not resolve the issue, check your browser's console network tab for CORS errors or request failures for further debugging.

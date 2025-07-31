@@ -110,10 +110,15 @@ function App() {
       setAnnounce("Subtitle correction job started.");
     } catch (err) {
       setUploading(false);
-      setError(
-        err?.message ||
-          "Failed to upload files. Please try again or check network connection."
-      );
+      // Improved error handling: detect "Failed to fetch" network errors and display actionable help.
+      let errMsg = "Failed to upload files. Please try again or check network connection.";
+      if (err?.message && (err.message.includes("Failed to fetch") || err.message.includes("NetworkError"))) {
+        errMsg = "Network error: Could not contact the backend API. This may be due to an incorrect REACT_APP_API_BASE, CORS settings, or that the backend service is not running.\n"
+          + "Check that your backend is running on the correct URL and port, and that REACT_APP_API_BASE matches that location.";
+      } else if (err?.message) {
+        errMsg = err.message;
+      }
+      setError(errMsg);
       setAnnounce("Upload failed.");
     }
   }
