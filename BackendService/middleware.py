@@ -1,5 +1,6 @@
 """
 Custom middleware for handling large file uploads and request size limits
+
 """
 
 from fastapi import HTTPException, Request
@@ -40,10 +41,19 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
                         )
                 except ValueError:
                     logger.warning(f"Invalid content-length header: {content_length}")
+            else:
+                # For multipart uploads without content-length, we'll check during processing
+                logger.info(f"Upload request to {request.url.path} without content-length header (likely multipart)")
         
-        # Continue with request processing
-        response = await call_next(request)
-        return response
+        try:
+            # Continue with request processing
+            response = await call_next(request)
+            return response
+        except Exception as e:
+            # Handle any processing errors with proper CORS headers
+            logger.error(f"Request processing error: {str(e)}")
+            # This will be caught by CORSHeadersMiddleware for proper error response
+            raise
 
 class CORSHeadersMiddleware(BaseHTTPMiddleware):
     """Additional CORS middleware to ensure proper headers are set on all responses including errors"""

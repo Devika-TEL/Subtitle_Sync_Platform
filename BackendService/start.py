@@ -1,5 +1,6 @@
 """
 Application startup script for the Subtitle Sync Platform Backend
+
 """
 
 import uvicorn
@@ -114,12 +115,19 @@ class BackendApplication:
                 access_log=True,
                 limit_max_requests=1000,
                 limit_concurrency=1000,
-                timeout_keep_alive=30,
-                timeout_graceful_shutdown=30,
-                # Increase limits for large file uploads (2GB)
-                http="httptools",  # Use httptools for better performance
+                timeout_keep_alive=120,  # Increased for large uploads
+                timeout_graceful_shutdown=60,
+                # Critical settings for large file uploads (2GB+)
+                http="h11",  # Use h11 for better large file handling
                 ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
                 h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
+                # Add additional timeout and size limits
+                server_header=False,
+                date_header=True,
+                # Request body size limit (2GB)
+                loop="asyncio",
+                # Increase timeout for slow clients uploading large files
+                client_timeout=300,  # 5 minutes for large uploads
             )
             
             server = uvicorn.Server(config)
@@ -149,12 +157,16 @@ def run_development_server():
         access_log=True,
         limit_max_requests=1000,
         limit_concurrency=1000,
-        timeout_keep_alive=30,
-        timeout_graceful_shutdown=30,
-        # Increase limits for large file uploads during development
-        http="httptools",
+        timeout_keep_alive=120,  # Increased for large uploads
+        timeout_graceful_shutdown=60,
+        # Critical settings for large file uploads during development
+        http="h11",  # Use h11 for better stability with large files
         ws_max_size=2 * 1024 * 1024 * 1024,  # 2GB WebSocket limit
         h11_max_incomplete_event_size=2 * 1024 * 1024 * 1024,  # 2GB HTTP limit
+        # Add client timeout for large uploads
+        server_header=False,
+        date_header=True,
+        loop="asyncio",
     )
 
 # PUBLIC_INTERFACE
