@@ -71,7 +71,7 @@
   flex-wrap: wrap;
 }
 
-.upload-btn {
+.upload-btn, .process-btn {
   background: #4169e1;
   color: #fff;
   border: none;
@@ -83,11 +83,28 @@
   transition: background 0.17s, transform 0.15s;
   outline: none;
 }
-.upload-btn:focus, .upload-btn:hover {
+
+.process-btn {
+  background: #13ad65;
+  margin-left: 0.5em;
+  min-width: 90px;
+}
+
+.upload-btn:focus, .upload-btn:hover,
+.process-btn:focus, .process-btn:hover {
   background: #2540a8;
   transform: translateY(-2px) scale(1.04);
 }
 
+.process-btn:focus, .process-btn:hover {
+  background: #0e783d;
+}
+
+.process-btn:disabled {
+  background: #B6D5C3;
+  color: #eee;
+  cursor: not-allowed;
+}
 .hint-text {
   margin-top: 0.5rem;
   text-align: center;
@@ -104,6 +121,66 @@
   text-align: center;
 }
 
+.progress-placeholder.complete {
+  color: #149957;
+  font-weight: 600;
+}
+.spinner {
+  display: inline-block;
+  width: 1.32em;
+  height: 1.32em;
+  border: 0.23em solid #bccffd;
+  border-radius: 50%;
+  border-right: 0.23em solid #598ceb;
+  margin-right: 0.7em;
+  animation: spinner-rotate 1.2s linear infinite;
+}
+@keyframes spinner-rotate {
+  100% { transform: rotate(360deg);}
+}
+
+
+.download-result-area {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 1.2rem;
+  margin-top: 0.2rem;
+}
+.download-btn {
+  background-color: #2a5bff;
+  color: #fff;
+  padding: 0.75rem 1.5rem;
+  font-size: 1.1rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(42, 91, 255, 0.12);
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s;
+  outline: none;
+}
+
+.download-btn:hover,
+.download-btn:focus {
+  background-color: #1945b9;
+  text-decoration: none;
+  color: #fff;
+}
+
+.download-note {
+  font-size: 0.98rem;
+  color: #0c3f68;
+  margin-top: 0.45rem;
+}
+
+.success-message {
+  margin-top: 0.2rem;
+}
+
 .dashboard-footer {
   background: #223056;
   color: #e0e8fa;
@@ -114,7 +191,6 @@
   margin-top: auto;
   border-top: 3px solid #2f4676;
 }
-
 
 /* Responsive adjustments */
 @media (max-width: 980px) {
