@@ -1,297 +1,33 @@
-:root {
-  --primary-blue: #20388F;
-  --accent-purple: #A41E7E;
-  --secondary-pink: #ED4C8B;
-  --yellow-accent: #FFC60B;
-  --white: #FFFFFF;
-  --gray-bg: #F7F7FB;
-  --card-shadow: 0 1px 6px 0 rgba(32, 56, 143, 0.07);
-  --card-radius: 1rem;
-  --transition: all 0.2s cubic-bezier(.49,.25,.44,.9);
-  --focus-shadow: 0 0 0 2px var(--yellow-accent);
-}
-
-/* Body & structure */
-body {
-  background: var(--gray-bg);
-  font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  color: var(--primary-blue);
-  margin: 0;
-  padding: 0;
-}
-
-/* --- Download Button --- */
-.download-section {
+.App {
   text-align: center;
-  margin-top: 32px;
-}
-.download-btn {
-  padding: 15px 40px;
-  background-color: #28a745;
-  color: #fff;
-  font-size: 1.3em;
-  border: none;
-  border-radius: 7px;
-  text-decoration: none;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(40,167,69,0.13);
-  transition: background-color 0.25s;
-  display: inline-block;
-  margin-top: 1.2em;
-}
-.download-btn:hover,
-.download-btn:focus {
-  background-color: #218838;
-  color: #fff;
-  outline: none;
+  max-width: 480px;
+  margin: 40px auto;
+  padding: 32px;
+  background: #fafaff;
+  border-radius: 12px;
+  box-shadow: 0 2px 16px rgba(0,0,0,.12);
 }
 
-/* Error message styling */
-.error-message {
-  color: #dc3545;
-  margin-top: 1em;
-  font-weight: 600;
-  text-align: center;
+form > div {
+  margin-bottom: 18px;
 }
 
-/* Remove any status/polling UI styles from previous logic */
-
-/* ----- Header, Tabs, and Branding ----- */
-.app-header {
-  background: linear-gradient(90deg, var(--primary-blue) 60%, var(--accent-purple) 100%);
-  color: var(--white);
-  padding: 2rem 1rem 1rem 1rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.brand-logo-container {
-  display: flex;
-  align-items: center;
-  font-size: 2.3rem;
-  font-weight: 700;
-}
-.brand-logo {
-  margin-right: 0.85rem;
-  font-size: 2.5rem;
-  text-shadow: 1px 1px 2px var(--secondary-pink);
-}
-.brand-title {
-  letter-spacing: 1.5px;
-  font-size: 2rem;
-  background: linear-gradient(90deg, var(--yellow-accent) 18%, var(--secondary-pink) 80%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.brand-subtitle {
-  font-size: 1.1rem;
-  font-weight: 400;
-  color: var(--yellow-accent);
-  letter-spacing: 1px;
-  margin-top: 0.4rem;
-}
-
-/* Tab Navigation */
-.tab-nav {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 2rem;
-  padding: 1.2rem 0 1rem 0;
-  background: var(--primary-blue);
-}
-.tab-btn {
-  background: none;
-  border: none;
-  outline: none;
-  color: var(--white);
-  font-size: 1.15rem;
-  font-weight: 500;
-  letter-spacing: 1px;
-  padding: 0.6rem 2.5rem;
-  margin: 0;
-  border-radius: 30px 30px 0 0;
-  cursor: pointer;
-  transition: var(--transition);
-  position: relative;
-}
-.tab-btn.active,
-.tab-btn:focus {
-  color: var(--primary-blue);
-  background: var(--yellow-accent);
-  box-shadow: 0 4px 12px 0 rgba(253, 198, 11, 0.18);
-  font-weight: 700;
-  z-index: 2;
-}
-.tab-btn:focus-visible {
-  outline: 2px solid var(--accent-purple);
-  box-shadow: var(--focus-shadow);
-}
-
-/* Main content and forms */
-.main-content {
-  max-width: 700px;
-  margin: 2.5rem auto 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-}
-
-.workflow-card {
-  background: var(--white);
-  padding: 2.2rem 2.0rem;
-  box-shadow: var(--card-shadow);
-  border-radius: var(--card-radius);
-  border: 3px solid var(--primary-blue);
-  display: flex;
-  flex-direction: column;
-  gap: 1.35rem;
-  transition: var(--transition);
-  margin-bottom: 0.2rem;
-}
-.workflow-card-header {
-  color: var(--accent-purple);
-  font-size: 1.4rem;
-  margin: 0 0 1.2rem 0;
-  letter-spacing: 1px;
-  font-weight: 700;
-}
-
-.file-label {
-  font-size: 1rem;
-  color: var(--primary-blue);
-  margin-bottom: .5rem;
-  font-weight: 500;
-  display: block;
-}
 input[type="file"] {
-  margin-bottom: 1.1rem;
-  border: none;
-  color: var(--accent-purple);
-  font-size: .98rem;
-  background: transparent;
-}
-input[type="file"]:focus {
-  outline: 2px solid var(--secondary-pink);
+  margin-left: 12px;
 }
 
-/* Language selector emphasis */
-.language-label {
-  margin-bottom: 1rem;
-  font-weight: 600;
-  color: var(--accent-purple);
-  position: relative;
-  font-size: 1.12rem;
-}
-.language-label-title {
-  border-bottom: 3px double var(--accent-purple);
-  padding-bottom: 2px;
-  font-size: 1.24rem;
-  color: #a41e7e;
-  letter-spacing: .5px;
-  font-weight: 700;
-  margin-right: 6px;
-}
-.emphasis-label {
-  background: #fff8ff;
-  border-radius: 6px;
-  padding: 3px 8px;
-  box-shadow: 0 0 7px #ffe9f8;
-}
-
-.language-select {
-  display: block;
-  width: 220px;
-  font-size: 1.11rem;
-  padding: 0.52rem 0.5rem;
-  margin: 0.65rem 0 1rem 0;
-  border: 2.5px solid var(--accent-purple);
-  border-radius: 7px;
-  background: var(--gray-bg);
-  color: var(--primary-blue);
-  transition: var(--transition);
-  font-weight: 600;
-}
-
-.language-select:focus, .language-select:active {
-  outline: 2px solid var(--yellow-accent);
-  background: #fff7ee;
-  border-color: var(--yellow-accent);
-}
-
-.language-select.invalid {
-  border-color: #dc3545;
-  background: #fff2f2;
-  box-shadow: 0 0 6px #ffd7da;
-}
-
-.required-asterisk {
-  color: #dc3545;
-  font-weight: bold;
-}
-
-.selector-error-msg {
-  color: #dc3545;
-  font-size: 0.98rem;
-  margin-left: 10px;
-  font-weight: bold;
-  margin-top: 0.3em;
-  position: absolute;
-}
-
-.actions {
-  display: flex;
-  gap: 1.5rem;
-  align-items: center;
-}
-
-/* Buttons */
-.primary-button {
-  padding: 0.8rem 2rem;
-  background: linear-gradient(93deg, var(--primary-blue) 51%, var(--accent-purple) 98%);
-  color: var(--white);
-  font-size: 1rem;
-  font-weight: 700;
-  border: none;
-  border-radius: 7px;
-  cursor: pointer;
-  transition: var(--transition);
-  margin-top: 0.9rem;
-  box-shadow: 0 4px 18px 0 rgba(31, 56, 143, 0.11);
-}
-.primary-button:disabled {
-  background: #bbb;
+button[type="submit"] {
+  background: #3379e5;
   color: #fff;
-  cursor: not-allowed;
-}
-.primary-button:hover,
-.primary-button:focus {
-  background: var(--yellow-accent);
-  color: var(--primary-blue);
-  outline: none;
-  box-shadow: var(--focus-shadow);
+  font-weight: 600;
+  border: none;
+  padding: 8px 22px;
+  border-radius: 5px;
+  cursor: pointer;
 }
 
-@media only screen and (max-width: 550px) {
-  .main-content {
-    max-width: 96vw;
-    padding: 0 0.2rem;
-  }
-  .workflow-card {
-    padding: 1.4rem 0.7rem;
-  }
+button[type="submit"]:hover {
+  background: #1b40a2;
 }
 
-/* Footer */
-.app-footer {
-  width: 100%;
-  padding: 1.1rem 0;
-  background: var(--accent-purple);
-  color: var(--white);
-  text-align: center;
-  font-size: 1rem;
-  letter-spacing: 1.2px;
-  margin-top: 4rem;
-  border-radius: 17px 17px 0 0;
-}
+/* Minimal generic styling only. Legacy status/polling/progress/footer, brand, nav, and special color theme styles removed. */
