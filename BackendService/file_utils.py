@@ -89,8 +89,19 @@ class FileValidator:
                     result["issues"].append(f"Expected video file, got {mime_type}")
             
             elif expected_type == 'subtitle':
-                # For subtitle files, check content rather than just MIME type
-                if mime_type.startswith('text/') or 'text' in mime_type:
+                # For subtitle files, be more flexible with MIME types since browsers vary
+                # Many subtitle files (especially .srt) are detected as text/plain or application/octet-stream
+                accepted_mime_patterns = [
+                    'text/',
+                    'application/x-subrip',
+                    'application/x-sub',
+                    'application/x-sami',
+                    'application/octet-stream',  # Some browsers report .srt as this
+                ]
+                
+                mime_type_acceptable = any(pattern in mime_type.lower() for pattern in accepted_mime_patterns)
+                
+                if mime_type_acceptable or mime_type == 'text/plain':
                     # Additional content validation for subtitles
                     content_valid = FileValidator._validate_subtitle_content(file_path)
                     if content_valid:
@@ -99,7 +110,14 @@ class FileValidator:
                     else:
                         result["issues"].append("File content doesn't appear to be a valid subtitle format")
                 else:
-                    result["issues"].append(f"Expected text file for subtitles, got {mime_type}")
+                    # Still validate content even if MIME type is unexpected - file extension might be correct
+                    content_valid = FileValidator._validate_subtitle_content(file_path)
+                    if content_valid:
+                        result["is_valid"] = True
+                        result["detected_type"] = "subtitle"
+                        result["issues"].append(f"Unusual MIME type for subtitle file: {mime_type}, but content appears valid")
+                    else:
+                        result["issues"].append(f"Expected text-based file for subtitles, got {mime_type}")
         
         except Exception as e:
             logger.error(f"File validation error: {e}")
@@ -112,20 +130,31 @@ class FileValidator:
         """Validate subtitle file content"""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(1000)  # Read first 1000 characters
+                content = f.read(2000)  # Read first 2000 characters
             
             # Check for common subtitle patterns
             subtitle_patterns = [
                 r'\d+\s*\n\d{2}:\d{2}:\d{2},\d{3}',  # SRT pattern
+                r'\d+\s*\r?\n\d{2}:\d{2}:\d{2},\d{3}',  # SRT pattern with carriage return
                 r'WEBVTT',  # WebVTT pattern
                 r'\d{2}:\d{2}:\d{2}\.\d{3}',  # WebVTT time pattern
                 r'\[Script Info\]',  # ASS/SSA pattern
                 r'\d{2}:\d{2}:\d{2}:\d{2}',  # SCC pattern
+                r'\{\d+\}\{\d+\}',  # SUB pattern (MicroDVD)
+                r'<SAMI>',  # SAMI pattern
+                r'<SYNC Start=\d+>',  # SAMI sync pattern
             ]
             
             import re
             for pattern in subtitle_patterns:
                 if re.search(pattern, content, re.IGNORECASE):
+                    return True
+            
+            # If no patterns match but file extension suggests subtitle format, allow it
+            file_extension = file_path.lower()
+            if any(file_extension.endswith(ext) for ext in ['.srt', '.vtt', '.ass', '.ssa', '.scc', '.sub', '.smi', '.sami']):
+                # Additional basic checks for subtitle-like content
+                if '-->' in content or any(char.isdigit() for char in content[:100]):
                     return True
             
             return False

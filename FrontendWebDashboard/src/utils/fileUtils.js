@@ -31,8 +31,32 @@ export const validateFile = (file, allowedTypes, maxSize = 100 * 1024 * 1024) =>
     return { isValid: false, errors };
   }
   
-  if (allowedTypes && !allowedTypes.includes(file.type)) {
-    errors.push(`Invalid file type. Allowed types: ${allowedTypes.join(', ')}`);
+  // Check file type - be more flexible with subtitle files
+  if (allowedTypes && allowedTypes.length > 0) {
+    const isValidMimeType = allowedTypes.includes(file.type);
+    const isSubtitleFile = allowedTypes === SUBTITLE_TYPES;
+    
+    if (!isValidMimeType) {
+      if (isSubtitleFile) {
+        // For subtitle files, also check file extension as browsers often report .srt as text/plain
+        const fileExtension = getFileExtension(file.name).toLowerCase();
+        const allowedExtensions = ['srt', 'vtt', 'ass', 'ssa', 'scc', 'sub', 'smi', 'sami'];
+        
+        if (!allowedExtensions.includes(fileExtension)) {
+          errors.push(`Invalid file type. Supported subtitle formats: SRT, VTT, ASS, SSA, SCC, SUB, SMI, SAMI`);
+        }
+      } else {
+        errors.push(`Invalid file type. Allowed types: ${allowedTypes.join(', ')}`);
+      }
+    } else if (isSubtitleFile) {
+      // Even if MIME type matches, still validate extension for subtitle files to prevent false positives
+      const fileExtension = getFileExtension(file.name).toLowerCase();
+      const allowedExtensions = ['srt', 'vtt', 'ass', 'ssa', 'scc', 'sub', 'smi', 'sami'];
+      
+      if (!allowedExtensions.includes(fileExtension)) {
+        errors.push(`Invalid file type. Supported subtitle formats: SRT, VTT, ASS, SSA, SCC, SUB, SMI, SAMI`);
+      }
+    }
   }
   
   if (file.size > maxSize) {

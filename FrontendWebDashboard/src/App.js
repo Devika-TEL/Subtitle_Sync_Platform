@@ -18,7 +18,7 @@ import {
 } from './services/api';
 
 // Utils
-import { downloadBlob, validateFile, formatFileSize, VIDEO_TYPES, SUBTITLE_TYPES } from './utils/fileUtils';
+import { downloadBlob, validateFile, formatFileSize, VIDEO_TYPES, SUBTITLE_TYPES, SUBTITLE_EXTENSIONS } from './utils/fileUtils';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
