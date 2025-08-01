@@ -311,11 +311,20 @@ function Dashboard() {
 }
 
 /* Main App */
+import ErrorBoundary from "./components/ErrorBoundary";
+
 export default function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/*" element={<Dashboard />} />
+        <Route
+          path="/*"
+          element={
+            <ErrorBoundary>
+              <Dashboard />
+            </ErrorBoundary>
+          }
+        />
       </Routes>
     </Router>
   );
