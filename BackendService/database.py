@@ -1,211 +1,113 @@
-"""
-Database utilities and connection management for the Subtitle Sync Platform
-"""
+import uuid
+import sqlalchemy as sa
+from sqlalchemy import create_engine, Column, String, Boolean, Integer, DateTime, Text, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from datetime import datetime
+from pydantic import BaseModel
 
-import sqlite3
-import os
-import logging
-from contextlib import contextmanager
-from typing import Optional, Dict, Any, List
+from config import settings
 
-logger = logging.getLogger(__name__)
+Base = declarative_base()
 
-# Database configuration
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), "..", "Database", "subtitle_sync_platform.db")
+# --- SQLAlchemy Schema Models ---
+class UserModel(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    role = Column(String, default="user")  # can be "user" or "admin"
+    disabled = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-class DatabaseManager:
-    """Database manager for handling connections and operations"""
-    
-    def __init__(self, db_path: str = DATABASE_PATH):
-        self.db_path = db_path
-        self.ensure_database_exists()
-    
-    def ensure_database_exists(self):
-        """Ensure database file and directory exist and users table exists"""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+class FileModel(Base):
+    __tablename__ = "files"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    path = Column(String, unique=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"))
+    type = Column(String) # video, subtitle, etc.
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship('UserModel')
 
-        needs_init = False
-        if not os.path.exists(self.db_path):
-            needs_init = True
-        else:
-            # Check if users table exists in the database
-            try:
-                conn = sqlite3.connect(self.db_path)
-                c = conn.cursor()
-                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-                exists = c.fetchone()
-                conn.close()
-                if not exists:
-                    needs_init = True
-            except Exception as e:
-                logger.warning(f"Exception checking users table: {e}")
-                needs_init = True
+class JobModel(Base):
+    __tablename__ = "jobs"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"))
+    file_id = Column(String, ForeignKey("files.id"))
+    type = Column(String) # upload, sync, generate_subtitle, compliance, etc.
+    status = Column(String, default="pending")
+    result = Column(Text)
+    logs = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship('UserModel')
+    file = relationship('FileModel')
 
-        if needs_init:
-            self.initialize_database()
-    
-    def initialize_database(self):
-        """Initialize database with schema"""
-        try:
-            # Try to import and use the models
-            import sys
-            sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-            from Database.models import create_tables
-            create_tables(self.db_path)
-            logger.info("Database initialized using models.py")
-        except Exception as e:
-            logger.warning(f"Could not initialize using models.py: {e}")
-            # Fallback: create tables directly
-            self._create_tables_directly()
-    
-    def _create_tables_directly(self):
-        """Create tables directly using SQL"""
-        schema_sql = """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            email TEXT,
-            role TEXT NOT NULL DEFAULT 'user'
-        );
+# --- Pydantic Models for API/Logic Layers ---
+class JobCreate(BaseModel):
+    user_id: str
+    file_id: str
+    type: str
 
-        CREATE TABLE IF NOT EXISTS videos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            filename TEXT NOT NULL,
-            upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            language TEXT,
-            original BOOLEAN DEFAULT 1
-        );
+# --- Database Session ---
+engine = create_engine(settings.DB_URL, echo=False, connect_args={"check_same_thread": False} if 'sqlite' in settings.DB_URL else {})
+SessionLocal = sessionmaker(bind=engine)
 
-        CREATE TABLE IF NOT EXISTS subtitles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            video_id INTEGER REFERENCES videos(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            filename TEXT NOT NULL,
-            language TEXT,
-            upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            processed BOOLEAN DEFAULT 0,
-            job_id INTEGER REFERENCES jobs(id)
-        );
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-        CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            video_id INTEGER REFERENCES videos(id) ON DELETE CASCADE,
-            subtitle_id INTEGER REFERENCES subtitles(id) ON DELETE CASCADE,
-            job_type TEXT NOT NULL,
-            status TEXT NOT NULL,
-            result_url TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            completed_at TIMESTAMP
-        );
-        """
-        
-        conn = self.get_connection()
-        try:
-            conn.executescript(schema_sql)
-            conn.commit()
-            logger.info("Database tables created successfully")
-        except Exception as e:
-            logger.error(f"Failed to create tables: {e}")
-            raise
-        finally:
-            conn.close()
-    
-    @contextmanager
-    def get_connection(self):
-        """Get database connection with proper error handling"""
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.row_factory = sqlite3.Row
-            yield conn
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Database error: {e}")
-            raise
-        finally:
-            if conn:
-                conn.close()
-    
-    # PUBLIC_INTERFACE
-    def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
-        """
-        Execute a SELECT query and return results as list of dictionaries
-        
-        Args:
-            query: SQL query string
-            params: Query parameters
-            
-        Returns:
-            List of dictionaries representing rows
-        """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-    
-    # PUBLIC_INTERFACE
-    def execute_insert(self, query: str, params: tuple = ()) -> int:
-        """
-        Execute an INSERT query and return the last row ID
-        
-        Args:
-            query: SQL INSERT query string
-            params: Query parameters
-            
-        Returns:
-            Last inserted row ID
-        """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            row_id = cursor.lastrowid
-            conn.commit()
-            return row_id
-    
-    # PUBLIC_INTERFACE
-    def execute_update(self, query: str, params: tuple = ()) -> int:
-        """
-        Execute an UPDATE or DELETE query and return number of affected rows
-        
-        Args:
-            query: SQL UPDATE/DELETE query string
-            params: Query parameters
-            
-        Returns:
-            Number of affected rows
-        """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            affected_rows = cursor.rowcount
-            conn.commit()
-            return affected_rows
+# --- Data Access Functions ---
+def create_user(db, username, hashed_password):
+    user = UserModel(username=username, hashed_password=hashed_password, role="user")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
-# Global database manager instance
-db_manager = DatabaseManager()
+def get_user_by_username(db, username):
+    return db.query(UserModel).filter(UserModel.username == username).first()
 
-# PUBLIC_INTERFACE
-def get_db_connection():
-    """
-    Get database connection for use in FastAPI dependencies
-    
-    Returns:
-        SQLite connection with row factory set
-    """
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+def create_file_entry(db, path, user_id, type):
+    file = FileModel(path=path, user_id=user_id, type=type)
+    db.add(file)
+    db.commit()
+    db.refresh(file)
+    return file
 
-# PUBLIC_INTERFACE
-def init_database():
-    """
-    Initialize database - creates tables if they don't exist
-    """
-    db_manager.initialize_database()
+def get_file_by_id(db, file_id):
+    return db.query(FileModel).filter(FileModel.id == file_id).first()
+
+def create_job(db, job: JobCreate):
+    db_job = JobModel(user_id=job.user_id, file_id=job.file_id, type=job.type)
+    db.add(db_job)
+    db.commit()
+    db.refresh(db_job)
+    return db_job
+
+def get_job(db, job_id):
+    return db.query(JobModel).filter(JobModel.id == job_id).first()
+
+def update_job_status(db, job_id, status, result=None, logs=None):
+    job = get_job(db, job_id)
+    if job:
+        job.status = status
+        job.updated_at = datetime.utcnow()
+        if result is not None:
+            job.result = result
+        if logs:
+            job.logs = (job.logs or "") + f"\n{datetime.utcnow()}: {logs}"
+        db.commit()
+        db.refresh(job)
+    return job
+
+def list_jobs(db):
+    return db.query(JobModel).order_by(JobModel.created_at.desc()).all()
+
+def list_users(db):
+    return db.query(UserModel).order_by(UserModel.created_at.desc()).all()
+
+def list_files(db):
+    return db.query(FileModel).order_by(FileModel.created_at.desc()).all()
