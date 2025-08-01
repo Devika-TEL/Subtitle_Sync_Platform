@@ -12,17 +12,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+
+# Import all main routers here, and assign tags/prefixes for organization in docs
 from auth import router as auth_router
 from subtitle_processor import router as subtitle_processor_router
-from job_processor import get_status  # if needed for router composition
+# from job_processor import router as job_processor_router  # Uncomment if applicable
 
 app = FastAPI(
-    title="Subtitle Sync Platform",
-    description="A backend for subtitle-audio sync and management.",
-    version="1.0"
+    title="Subtitle Sync Platform Backend Service",
+    description="API for audio-subtitle sync, subtitle generation, correction, validation, and translation.",
+    version="1.0.0",
+    docs_url="/docs",                     # Swagger UI endpoint
+    openapi_url="/openapi.json",          # OpenAPI schema endpoint
+    redoc_url="/redoc",                   # ReDoc docs endpoint
 )
 
-app.include_router(auth_router)
-app.include_router(subtitle_processor_router)
-# For job_processor, if it implements a router, uncomment below:
-# app.include_router(job_processor_router)
+# PUBLIC_INTERFACE
+# Add main routers - tag/prefix values improve docs clarity and grouping
+app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(subtitle_processor_router, prefix="/subtitles", tags=["Subtitles"])
+# app.include_router(job_processor_router, prefix="/jobs", tags=["Job Processing"])  # Enable if router is available
+
+# Additional routers can be included above as needed.
