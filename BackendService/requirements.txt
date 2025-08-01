@@ -1,0 +1,68 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+python-multipart
+SQLAlchemy
+databases
+aiosqlite
+alembic
+
+# Authentication
+python-jose
+passlib[bcrypt]
+
+# Async job processing
+celery
+redis
+
+# Subtitle file handling & format conversion
+pysrt
+python-subtitle
+chardet
+cchardet
+
+# Spell checking and compliance
+pyenchant
+language-tool-python
+
+# Translation and LLM integration
+googletrans==4.0.0rc1
+openai
+langchain
+google-generativeai
+langchain-google-genai
+
+# Logging and monitoring
+loguru
+structlog
+sentry-sdk
+prometheus-client
+
+# CORS and middleware
+starlette
+
+# Pydantic for validation
+pydantic
+
+# Testing
+pytest
+pytest-asyncio
+httpx
+
+# Utilities
+tqdm
+requests
+
+# Optional: for file uploads >2GB on some deployments
+aiofiles
+
+# For admin dashboard and GUI auth (optional, if needed)
+# fastapi-admin
+
+# If you need to parse/validate timecodes, use:
+python-dateutil
+
+# For stricter compliance and audit logging
+auditlog
+
+# Only pin critical packages, others can be latest (ensure security audits in prod)

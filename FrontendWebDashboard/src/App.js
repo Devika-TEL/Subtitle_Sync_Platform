@@ -13,6 +13,7 @@ import {
 } from "./services/api";
 import Notification from "./components/Notification";
 import { downloadBlob } from "./utils/fileUtils";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 // File extensions accepted for subtitles
 const SUBTITLE_EXTENSIONS = ".srt,.vtt,.ass,.ssa,.sub,.smi,.sami";
@@ -311,8 +312,6 @@ function Dashboard() {
 }
 
 /* Main App */
-import ErrorBoundary from "./components/ErrorBoundary";
-
 export default function App() {
   return (
     <Router>
