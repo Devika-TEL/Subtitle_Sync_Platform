@@ -1,5 +1,7 @@
 from fastapi import FastAPI
-from . import auth, subtitle_processor, job_processor
+import auth
+import subtitle_processor
+import job_processor
 
 app = FastAPI(
     title="Subtitle Sync Platform",
