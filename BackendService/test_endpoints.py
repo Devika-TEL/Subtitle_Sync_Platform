@@ -116,10 +116,12 @@ async def test_translate_subtitles_error(monkeypatch):
 
 # Instructions for running:
 """
-To run these backend tests:
+To run these backend tests (with async test support):
 
-1. Install dependencies if not present:
+1. Install test dependencies (pytest, httpx, and pytest-asyncio is *mandatory* for async test support):
    pip install pytest pytest-asyncio httpx
+
+   Note: pytest-asyncio must be installed for @pytest.mark.asyncio decorated async test functions.
 
 2. From the Subtitle_Sync_Platform/BackendService folder run:
    pytest --maxfail=2 -v
