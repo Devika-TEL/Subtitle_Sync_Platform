@@ -1,3 +1,16 @@
+"""
+IMPORTANT FOR LOCAL DEVELOPMENT:
+This backend service loads environment variables from a .env file using python-dotenv.
+This guarantees environment variables (such as GEMINI_API_KEY) are always available, regardless of whether you
+run the app via 'uvicorn', an IDE, or any other means. Do not rely solely on uvicorn's built-in .env loading.
+This maximizes reliability and prevents environment-related bugs.
+
+Best practice: Always use python-dotenv's load_dotenv() at the TOP of your FastAPI entrypoint.
+"""
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from auth import router as auth_router
 from subtitle_processor import router as subtitle_processor_router
