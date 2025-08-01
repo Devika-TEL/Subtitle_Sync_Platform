@@ -5,3 +5,6 @@ google-generativeai
 langchain-google-genai
 pydantic
 pydantic-settings
+alembic
+sqlalchemy
+psycopg2-binary
