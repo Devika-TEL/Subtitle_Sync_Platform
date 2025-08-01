@@ -3,4 +3,5 @@ uvicorn
 langchain
 google-generativeai
 langchain-google-genai
->>>>>>> REPLACE
+pydantic
+pydantic-settings
