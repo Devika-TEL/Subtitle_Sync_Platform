@@ -1,8 +1,6 @@
 fastapi
 uvicorn
-sqlalchemy
-passlib[bcrypt]
-python-jose[cryptography]
-pydantic
-pydantic-settings
-python-multipart
+langchain
+google-generativeai
+langchain-google-genai
+>>>>>>> REPLACE
