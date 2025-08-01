@@ -23,7 +23,6 @@ app = FastAPI(
 )
 
 app.include_router(auth_router)
-# Add additional routers as needed, e.g.:
-# app.include_router(subtitle_processor_router)
+app.include_router(subtitle_processor_router)
 # For job_processor, if it implements a router, uncomment below:
 # app.include_router(job_processor_router)
