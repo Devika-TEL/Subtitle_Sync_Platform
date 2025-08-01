@@ -3,99 +3,8 @@ import {
   BrowserRouter as Router,
   Routes,
   Route,
-  Navigate,
   Link,
-  useNavigate,
 } from "react-router-dom";
-
-/* Auth Form (Login/Register) */
-function AuthForm({ mode = "login", onAuth }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const navigate = useNavigate();
-
-  // Dummy handler (replace with API calls)
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setErr("");
-    try {
-      // TODO: Connect to backend
-      // fetch("/auth/token" or "/auth/register")...
-      setTimeout(() => {
-        setLoading(false);
-        localStorage.setItem(
-          "authToken",
-          "dummy-token-" +
-            Math.random().toString(36).slice(2) +
-            (mode === "register" ? "-r" : "")
-        );
-        onAuth();
-        navigate("/");
-      }, 600);
-    } catch (e) {
-      setErr("Authentication failed.");
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="auth-container">
-      <h2>{mode === "login" ? "Login" : "Register"}</h2>
-      <form onSubmit={handleSubmit}>
-        <input
-          type="email"
-          placeholder="Email"
-          autoComplete="username"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit" disabled={loading}>
-          {loading
-            ? mode === "login"
-              ? "Logging in..."
-              : "Registering..."
-            : mode === "login"
-            ? "Login"
-            : "Register"}
-        </button>
-        {err && (
-          <div className="error" style={{ color: "red", marginTop: 10 }}>
-            {err}
-          </div>
-        )}
-      </form>
-      <div style={{ marginTop: 12 }}>
-        {mode === "login" ? (
-          <span>
-            No account?{" "}
-            <button type="button" onClick={() => navigate("/register")}>
-              Register
-            </button>
-          </span>
-        ) : (
-          <span>
-            Have an account?{" "}
-            <button type="button" onClick={() => navigate("/login")}>
-              Login
-            </button>
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /* File Upload (video/subtitles) */
 function UploadFiles({ onUpload }) {
@@ -165,14 +74,11 @@ function ProgressPlaceholder() {
 }
 
 /* Dashboard Page */
-function Dashboard({ onLogout }) {
+function Dashboard() {
   return (
     <div className="dashboard">
       <header>
         <h1>Subtitle Sync Platform</h1>
-        <button onClick={onLogout} style={{ float: "right" }}>
-          Logout
-        </button>
       </header>
       <nav>
         <Link to="/">Dashboard</Link> | <Link to="/upload">Upload Files</Link> |{" "}
@@ -194,7 +100,7 @@ function Dashboard({ onLogout }) {
               <>
                 <h2>Welcome!</h2>
                 <p>
-                  This dashboard allows you to authenticate, upload videos and subtitle files, and monitor job progress.
+                  This dashboard allows you to upload videos and subtitle files, and monitor job progress.
                   Connect this app to your backend to enable real processing.
                 </p>
                 <UploadFiles />
@@ -214,31 +120,10 @@ function Dashboard({ onLogout }) {
 
 /* Main App */
 export default function App() {
-  const [authed, setAuthed] = useState(
-    !!localStorage.getItem("authToken")
-  );
-  function onAuth() {
-    setAuthed(true);
-  }
-  function onLogout() {
-    localStorage.removeItem("authToken");
-    setAuthed(false);
-  }
   return (
     <Router>
       <Routes>
-        <Route
-          path="/login"
-          element={authed ? <Navigate to="/" /> : <AuthForm mode="login" onAuth={onAuth} />}
-        />
-        <Route
-          path="/register"
-          element={authed ? <Navigate to="/" /> : <AuthForm mode="register" onAuth={onAuth} />}
-        />
-        <Route
-          path="/*"
-          element={authed ? <Dashboard onLogout={onLogout} /> : <Navigate to="/login" />}
-        />
+        <Route path="/*" element={<Dashboard />} />
       </Routes>
     </Router>
   );
