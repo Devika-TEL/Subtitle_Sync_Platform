@@ -19,7 +19,7 @@ from job_processor import (
     process_upload_job, process_sync_job, process_generation_job, process_translation_job, process_compliance_job
 )
 from subtitle_processor import (
-    detect_subtitle_format, validate_subtitle_file, convert_subtitle_format
+    detect_subtitle_format, validate_subtitle_file
 )
 from file_utils import (
     save_upload_file, get_file_path, delete_file_if_exists
