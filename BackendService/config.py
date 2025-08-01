@@ -1,31 +1,21 @@
 from pydantic import BaseSettings, Field
+from functools import lru_cache
 
 # PUBLIC_INTERFACE
 class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables.
-    Add more fields as necessary for config and secrets.
-    """
-    DB_URI: str = Field("sqlite:///./test.db", env="DATABASE_URL")
-    GEMINI_API_KEY: str = Field(..., env="GEMINI_API_KEY")
-    # Add additional config fields as needed
+    """Application configuration managed via environment variables or .env file."""
+    GEMINI_API_KEY: str = Field(..., description="API Key for Gemini LLM Integration")
+    DATABASE_URL: str = Field(..., description="Database connection string/URL")
 
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8"
+        case_sensitive = True
 
-# Create and export the settings object
-settings = Settings()
+# Use lru_cache to ensure that settings are only loaded and instantiated once
+@lru_cache()
+def get_settings():
+    """Returns a cached Settings instance."""
+    return Settings()
 
-# Backward compatible access if code expects 'DB_URI' global
-DB_URI = settings.DB_URI
-
-# PUBLIC_INTERFACE
-def get_gemini_api_key():
-    """
-    Fetch Gemini API key from the settings object.
-    """
-    api_key = settings.GEMINI_API_KEY
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set in environment variables.")
-    return api_key
+# Exported singleton for use throughout the backend
+settings: Settings = get_settings()
