@@ -14,3 +14,8 @@ pytest==8.3.4
 black==24.10.0
 flake8==7.1.1
 python-magic
+chardet==5.2.0
+pysrt==1.1.2
+langdetect==1.0.9
+spacy==3.8.7
+textblob==0.19.0
