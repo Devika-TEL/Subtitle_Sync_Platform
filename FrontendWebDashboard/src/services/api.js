@@ -6,17 +6,39 @@ const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
  * @param {File|null} videoFile 
  * @param {File|null} subtitleFile 
  */
+/**
+ * PUBLIC_INTERFACE
+ * Uploads video and/or subtitle file to backend.
+ * - If both are provided: uploads them one after another and returns both results.
+ * - If only one file: uploads to its relevant endpoint.
+ * @param {File|null} videoFile
+ * @param {File|null} subtitleFile
+ */
 export async function uploadVideoAndSubtitle(videoFile, subtitleFile) {
-  const formData = new FormData();
-  if (videoFile) formData.append("video", videoFile);
-  if (subtitleFile) formData.append("subtitle", subtitleFile);
-  const res = await fetch(`${API_BASE}/upload`, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return await res.json();
+  let responses = {};
+  if (videoFile) {
+    const formDataVideo = new FormData();
+    formDataVideo.append("file", videoFile);
+    const res = await fetch(`${API_BASE}/upload/video`, {
+      method: "POST",
+      body: formDataVideo,
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(await res.text());
+    responses.video = await res.json();
+  }
+  if (subtitleFile) {
+    const formDataSubtitle = new FormData();
+    formDataSubtitle.append("file", subtitleFile);
+    const res = await fetch(`${API_BASE}/upload/subtitle`, {
+      method: "POST",
+      body: formDataSubtitle,
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(await res.text());
+    responses.subtitle = await res.json();
+  }
+  return responses;
 }
 
 /**
