@@ -1,217 +1,117 @@
-import axios from 'axios';
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 
-// Get base URL from environment variable, fallback to new backend URL
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/';
-
-// Debug logging for API configuration
-if (process.env.NODE_ENV === 'development') {
-  console.log('API Configuration:', {
-    baseURL: API_BASE_URL,
-    timeout: 300000,
-    environment: process.env.NODE_ENV
+/**
+ * PUBLIC_INTERFACE
+ * Uploads video and/or subtitle file to backend.
+ * @param {File|null} videoFile 
+ * @param {File|null} subtitleFile 
+ */
+export async function uploadVideoAndSubtitle(videoFile, subtitleFile) {
+  const formData = new FormData();
+  if (videoFile) formData.append("video", videoFile);
+  if (subtitleFile) formData.append("subtitle", subtitleFile);
+  const res = await fetch(`${API_BASE}/upload`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
   });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
 }
 
-// Create axios instance with default config
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 300000, // 5 minutes for file processing
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// Request interceptor for adding auth tokens if needed
-api.interceptors.request.use(
-  (config) => {
-    // Add auth token if available
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
-
-// Response interceptor for error handling
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    // Enhanced error logging for debugging
-    console.error('API Error Details:', {
-      message: error.message,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      headers: error.response?.headers,
-      config: {
-        url: error.config?.url,
-        method: error.config?.method,
-        baseURL: error.config?.baseURL
-      }
-    });
-    
-    // Temporarily disabled auth redirect
-    return Promise.reject(error);
-  }
-);
-
-// PUBLIC_INTERFACE
 /**
- * Process video and/or subtitle files
- * @param {FormData} formData - Contains video and/or subtitle files
- * @returns {Promise} - API response with processed file
+ * PUBLIC_INTERFACE
+ * Fetch jobs belonging to the current user.
  */
-export const processFiles = async (formData) => {
-  try {
-    const response = await api.post('/process', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      responseType: 'blob', // For file download
-    });
-    return response;
-  } catch (error) {
-    console.error('Error processing files:', error);
-    throw error;
-  }
-};
+export async function getJobs() {
+  const res = await fetch(`${API_BASE}/jobs`, { credentials: "include" });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
 
-// PUBLIC_INTERFACE
 /**
- * Upload video file for subtitle generation
- * @param {File} videoFile - Video file to process
- * @param {string} language - Target language for subtitle generation
- * @returns {Promise} - API response with generated subtitles
+ * PUBLIC_INTERFACE
+ * Get user's uploaded subtitle files
  */
-export const generateSubtitles = async (videoFile, language = 'en') => {
-  const formData = new FormData();
-  formData.append('video', videoFile);
-  formData.append('language', language);
-  
-  return processFiles(formData);
-};
+export async function getUserSubtitles() {
+  const res = await fetch(`${API_BASE}/subtitles`, { credentials: "include" });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
 
-// PUBLIC_INTERFACE
 /**
- * Upload video and subtitle files for correction
- * @param {File} videoFile - Video file
- * @param {File} subtitleFile - Subtitle file to correct
- * @returns {Promise} - API response with corrected subtitles
+ * PUBLIC_INTERFACE
+ * Request correction for a subtitle id.
  */
-export const correctSubtitles = async (videoFile, subtitleFile) => {
-  const formData = new FormData();
-  formData.append('video', videoFile);
-  formData.append('subtitle', subtitleFile);
-  
-  return processFiles(formData);
-};
+export async function requestCorrection(subId) {
+  const res = await fetch(`${API_BASE}/subtitles/${subId}/correct`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
 
-// PUBLIC_INTERFACE
 /**
- * Get job status by ID
- * @param {string} jobId - Job identifier
- * @returns {Promise} - Job status information
+ * PUBLIC_INTERFACE
+ * Request translation for a subtitle id to a target language.
  */
-export const getJobStatus = async (jobId) => {
-  try {
-    const response = await api.get(`/jobs/${jobId}/status`);
-    return response.data;
-  } catch (error) {
-    console.error('Error getting job status:', error);
-    throw error;
-  }
-};
+export async function requestTranslation(subId, targetLanguage) {
+  const res = await fetch(`${API_BASE}/subtitles/${subId}/translate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_language: targetLanguage }),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
 
-// PUBLIC_INTERFACE
 /**
- * Get list of user's subtitle files
- * @returns {Promise} - List of subtitle files
+ * PUBLIC_INTERFACE
+ * Download subtitle file by id.
  */
-export const getSubtitleFiles = async () => {
-  try {
-    const response = await api.get('/subtitles');
-    return response.data;
-  } catch (error) {
-    console.error('Error getting subtitle files:', error);
-    throw error;
-  }
-};
+export async function downloadSubtitle(subId) {
+  const res = await fetch(`${API_BASE}/subtitles/${subId}/download`, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  // Download as file
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = (res.headers.get("Content-Disposition")?.split("filename=")[1]) || "subtitle.srt";
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  a.remove();
+}
 
-// PUBLIC_INTERFACE
 /**
- * Download subtitle file by ID
- * @param {string} fileId - File identifier
- * @returns {Promise} - File blob response
+ * PUBLIC_INTERFACE
+ * Fetch specific job status by job id.
  */
-export const downloadSubtitleFile = async (fileId) => {
-  try {
-    const response = await api.get(`/subtitles/${fileId}/download`, {
-      responseType: 'blob',
-    });
-    return response;
-  } catch (error) {
-    console.error('Error downloading file:', error);
-    throw error;
-  }
-};
+export async function getJobStatus(jobId) {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/status`, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
 
-// PUBLIC_INTERFACE
 /**
- * Request translation of subtitle file
- * @param {string} fileId - Source file identifier
- * @param {string} targetLanguage - Target language code
- * @returns {Promise} - Translation job response
+ * PUBLIC_INTERFACE
+ * Register a new user.
+ * @param {Object} userData - Must contain required registration fields
  */
-export const requestTranslation = async (fileId, targetLanguage) => {
-  try {
-    const response = await api.post(`/subtitles/${fileId}/translate`, {
-      target_language: targetLanguage,
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error requesting translation:', error);
-    throw error;
-  }
-};
-
-// PUBLIC_INTERFACE
-/**
- * User authentication
- * @param {string} email - User email
- * @param {string} password - User password
- * @returns {Promise} - Authentication response
- */
-export const authenticateUser = async (email, password) => {
-  try {
-    const response = await api.post('/auth/login', {
-      email,
-      password,
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error during authentication:', error);
-    throw error;
-  }
-};
-
-// PUBLIC_INTERFACE
-/**
- * User registration
- * @param {Object} userData - User registration data
- * @returns {Promise} - Registration response
- */
-export const registerUser = async (userData) => {
-  try {
-    const response = await api.post('/auth/register', userData);
-    return response.data;
-  } catch (error) {
-    console.error('Error during registration:', error);
-    throw error;
-  }
-};
-
-export default api;
+export async function registerUser(userData) {
+  const res = await fetch(`${API_BASE}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(userData),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
