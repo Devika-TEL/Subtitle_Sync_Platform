@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     
     # Application settings
     app_name: str = "Subtitle Sync Backend API"
+
+    # Gemini LLM integration
+    gemini_api_key: Optional[str] = None  # Set via GEMINI_API_KEY env var
     app_version: str = "1.0.0"
     debug: bool = False
     
@@ -135,6 +138,7 @@ class Settings(BaseSettings):
             "azure_speech_key": {"env": "AZURE_SPEECH_KEY"},
             "azure_speech_region": {"env": "AZURE_SPEECH_REGION"},
             "google_translate_api_key": {"env": "GOOGLE_TRANSLATE_API_KEY"},
+            "gemini_api_key": {"env": "GEMINI_API_KEY"},
             "cors_origins": {"env": "CORS_ORIGINS"},
             "max_file_size_mb": {"env": "MAX_FILE_SIZE_MB"},
         }

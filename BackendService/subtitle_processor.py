@@ -11,18 +11,21 @@ from pathlib import Path
 from typing import Optional
 import re
 
+from subtitle_gemini import get_gemini_llm
+
 logger = logging.getLogger(__name__)
 
 class SubtitleProcessor:
-    """Handles subtitle processing operations"""
+    """Handles subtitle processing operations using AI (Gemini) if available"""
     
     def __init__(self):
         self.processed_dir = "processed"
         os.makedirs(self.processed_dir, exist_ok=True)
     
+    # PUBLIC_INTERFACE
     def correct_subtitles(self, video_path: str, subtitle_path: str) -> str:
         """
-        Correct subtitle timing and quality issues
+        Correct subtitle timing and quality issues using Gemini LLM.
         
         Args:
             video_path: Path to video file
@@ -33,17 +36,19 @@ class SubtitleProcessor:
         """
         try:
             logger.info(f"Starting subtitle correction: video={video_path}, subtitle={subtitle_path}")
-            
-            # Generate output filename
             subtitle_name = os.path.basename(subtitle_path)
             name_without_ext = os.path.splitext(subtitle_name)[0]
             output_filename = f"temp_{self._generate_id()}_{name_without_ext}_corrected.srt"
             output_path = os.path.join(self.processed_dir, output_filename)
+
+            with open(subtitle_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            try:
+                corrected_content = get_gemini_llm().correct_subtitles(original_content)
+            except Exception as e:
+                logger.warning(f"Falling back to basic correction due to Gemini error: {e}")
+                corrected_content = self._basic_subtitle_correction(subtitle_path)
             
-            # For now, implement basic correction by copying and cleaning the subtitle file
-            corrected_content = self._basic_subtitle_correction(subtitle_path)
-            
-            # Write corrected content
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(corrected_content)
             
@@ -53,10 +58,11 @@ class SubtitleProcessor:
         except Exception as e:
             logger.error(f"Subtitle correction failed: {str(e)}")
             raise
-    
+
+    # PUBLIC_INTERFACE
     def generate_subtitles(self, video_path: str, language: str = "en") -> str:
         """
-        Generate subtitles from video using AI/speech recognition
+        Generate subtitles from video using Gemini LLM.
         
         Args:
             video_path: Path to video file
@@ -67,23 +73,28 @@ class SubtitleProcessor:
         """
         try:
             logger.info(f"Starting subtitle generation: video={video_path}, language={language}")
-            
-            # Generate output filename
             video_name = os.path.basename(video_path)
             name_without_ext = os.path.splitext(video_name)[0]
             output_filename = f"temp_{self._generate_id()}_{name_without_ext}_generated_{language}.srt"
             output_path = os.path.join(self.processed_dir, output_filename)
+
+            # For MVP, use audio transcript extraction stub
+            # TODO: Replace below with actual transcript extraction from video audio
             
-            # For demo purposes, generate a sample subtitle file
-            sample_subtitles = self._generate_sample_subtitles(video_name, language)
+            transcript = f"This is a sample transcript for video file: {video_name}."
+
+            try:
+                subtitles_content = get_gemini_llm().generate_subtitles(transcript, language)
+            except Exception as e:
+                logger.warning(f"Falling back to sample subtitles due to Gemini error: {e}")
+                subtitles_content = self._generate_sample_subtitles(video_name, language)
             
-            # Write generated content
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(sample_subtitles)
+                f.write(subtitles_content)
             
             logger.info(f"Subtitle generation completed: {output_path}")
             return output_path
-            
+        
         except Exception as e:
             logger.error(f"Subtitle generation failed: {str(e)}")
             raise
