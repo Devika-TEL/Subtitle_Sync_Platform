@@ -29,7 +29,7 @@ from auth import UserAuth, session_manager
 from database import db_manager, get_db_connection
 from job_processor import job_processor
 from file_utils import file_manager
-from subtitle_repositioning_code import process_subtitle
+# Lazy import for repositioning to avoid heavy dependencies at startup
 
 # Configure comprehensive logging
 logging.basicConfig(
@@ -675,7 +675,8 @@ async def reposition_subtitles(
         video_path = save_uploaded_file(video, UPLOAD_DIR)
         subtitle_path = save_uploaded_file(subtitle, UPLOAD_DIR)
 
-        # Process repositioning
+        # Process repositioning (lazy import to avoid heavy startup dependencies)
+        from subtitle_repositioning_code import process_subtitle
         result_path = process_subtitle(video_path, subtitle_path, min_frames=min_frames)
 
         # Return file response
