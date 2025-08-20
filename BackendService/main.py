@@ -72,6 +72,16 @@ app = FastAPI(
     ]
 )
 
+# Extend OpenAPI tags with 'videos' group
+try:
+    existing_tags = app.openapi_tags or []
+except Exception:
+    existing_tags = []
+app.openapi_tags = existing_tags + [{
+    "name": "videos",
+    "description": "Video management and downloads (YouTube fetch)."
+}]
+
 # CORS middleware for frontend integration
 app.add_middleware(
     CORSMiddleware,
@@ -99,10 +109,12 @@ security = HTTPBearer(auto_error=False)
 DATABASE_PATH = os.path.join(os.path.dirname(__file__), "..", "Database", "subtitle_sync_platform.db")
 UPLOAD_DIR = "uploads"
 PROCESSED_DIR = "processed"
+VIDEOS_DIR = "videos"
 
 # Ensure directories exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
+os.makedirs(VIDEOS_DIR, exist_ok=True)
 
 # JWT configuration
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
@@ -139,6 +151,12 @@ class SubtitleFile(BaseModel):
 
 class TranslationRequest(BaseModel):
     target_language: str = Field(..., min_length=2, max_length=5)
+
+class YouTubeDownloadRequest(BaseModel):
+    """Request model for downloading a YouTube video."""
+    url: str = Field(..., description="Public YouTube URL to download")
+    format: Optional[str] = Field(default="mp4", description="Preferred container format (e.g., mp4, webm). Defaults to mp4")
+    filename: Optional[str] = Field(default=None, description="Optional base filename (without extension). Unsafe characters will be sanitized")
 
 # Request logging middleware
 @app.middleware("http")
@@ -671,6 +689,102 @@ async def reposition_subtitles(
     except Exception as e:
         logger.exception("Repositioning failed")
         raise HTTPException(status_code=500, detail=f"Repositioning failed: {e}")
+
+# PUBLIC_INTERFACE
+@app.post(
+    "/download-youtube",
+    tags=["videos"],
+    summary="Download a public YouTube video",
+    description="Downloads a public YouTube video using yt-dlp and saves it to the server 'videos' directory."
+)
+async def download_youtube_video(payload: YouTubeDownloadRequest):
+    """
+    FastAPI endpoint to download a YouTube video using yt-dlp.
+
+    Parameters:
+    - url: The public YouTube URL to download.
+    - format: Preferred output format/container (e.g., 'mp4', 'webm'). Default is 'mp4'.
+    - filename: Optional base filename (without extension). Unsafe characters will be sanitized.
+
+    Returns:
+    - JSONResponse: Success status, message, saved file path, filename, and basic metadata.
+
+    Notes:
+    - The downloaded file is saved under BackendService/videos.
+    - The 'videos' directory is created if it does not exist.
+    - Requires the 'yt-dlp' Python package to be installed (added to requirements.txt).
+    """
+    # Basic URL validation for YouTube domains
+    if not re.match(r"^(https?://)?(www\\.)?(youtube\\.com|youtu\\.be)/", payload.url, flags=re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Invalid URL: only YouTube links (youtube.com or youtu.be) are supported.")
+
+    # Import yt_dlp lazily to allow app startup even if dependency isn't installed yet
+    try:
+        import yt_dlp  # type: ignore
+    except Exception as e:
+        logger.exception("yt-dlp import failed")
+        raise HTTPException(
+            status_code=500,
+            detail="yt-dlp is not available. Ensure 'yt-dlp' is installed (added to requirements.txt)."
+        )
+
+    # Ensure videos directory exists
+    os.makedirs(VIDEOS_DIR, exist_ok=True)
+
+    # Sanitize optional filename
+    output_base = "%(title)s-%(id)s"
+    if payload.filename:
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", payload.filename.strip())
+        if not safe_name:
+            safe_name = "video"
+        output_base = safe_name
+
+    # Choose output format
+    preferred_format = (payload.format or "mp4").lower().strip()
+    if preferred_format == "mp4":
+        ydl_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    else:
+        # Fallback to best available if unknown format is requested
+        ydl_format = "best"
+
+    outtmpl = os.path.join(VIDEOS_DIR, output_base + ".%(ext)s")
+
+    ydl_opts = {
+        "format": ydl_format,
+        "outtmpl": outtmpl,
+        "noplaylist": True,
+        "restrictfilenames": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(payload.url, download=True)
+            downloaded_filepath = ydl.prepare_filename(info)
+            filename = os.path.basename(downloaded_filepath)
+            rel_path = os.path.join(VIDEOS_DIR, filename)
+
+        return {
+            "success": True,
+            "message": "Video downloaded successfully.",
+            "file_path": rel_path,
+            "filename": filename,
+            "metadata": {
+                "id": info.get("id"),
+                "title": info.get("title"),
+                "duration": info.get("duration"),
+                "webpage_url": info.get("webpage_url"),
+                "ext": info.get("ext"),
+            }
+        }
+    except Exception as e:
+        # Try to provide a user-friendly error when possible
+        logger.exception("Failed to download YouTube video")
+        detail = str(e)
+        if "This video is unavailable" in detail or "Private video" in detail:
+            raise HTTPException(status_code=403, detail="The requested video is unavailable or private.")
+        raise HTTPException(status_code=500, detail=f"Failed to download video: {detail}")
 
 if __name__ == "__main__":
     import uvicorn

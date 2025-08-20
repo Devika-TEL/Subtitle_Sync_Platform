@@ -25,3 +25,4 @@ opencv-python-headless
 rapidocr-onnxruntime
 onnxruntime
 pillow
+yt-dlp
