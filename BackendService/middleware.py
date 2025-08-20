@@ -22,7 +22,7 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
         """Process request and handle file size validation"""
         
         # Check if this is a file upload endpoint
-        if request.url.path in ["/process", "/videos/upload", "/subtitles/upload"]:
+        if request.url.path in ["/process", "/reposition", "/videos/upload", "/subtitles/upload"]:
             # Get content length from headers
             content_length = request.headers.get("content-length")
             

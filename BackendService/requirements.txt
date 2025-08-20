@@ -19,3 +19,9 @@ pysrt==1.1.2
 langdetect==1.0.9
 spacy==3.8.7
 textblob==0.19.0
+# Dependencies for subtitle repositioning (OCR + CV)
+numpy
+opencv-python-headless
+rapidocr-onnxruntime
+onnxruntime
+pillow

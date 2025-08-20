@@ -29,6 +29,7 @@ from auth import UserAuth, session_manager
 from database import db_manager, get_db_connection
 from job_processor import job_processor
 from file_utils import file_manager
+from subtitle_repositioning_code import process_subtitle
 
 # Configure comprehensive logging
 logging.basicConfig(
@@ -618,6 +619,58 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
+@app.post(
+    "/reposition",
+    tags=["processing"],
+    summary="Reposition subtitles to avoid burnt-in text",
+    description="Accepts a video and a subtitle file (.srt, .ass, .ssa, .vtt), runs OCR on sampled frames to detect burnt-in text, and returns a new subtitle file with cues repositioned (top/bottom) to avoid overlap."
+)
+async def reposition_subtitles(
+    video: UploadFile = File(..., description="Video file for analysis (required)"),
+    subtitle: UploadFile = File(..., description="Subtitle file to reposition (.srt, .ass, .ssa, .vtt)"),
+    min_frames: int = Form(3, description="Number of frames to sample per subtitle segment for OCR decision")
+):
+    """
+    Reposition subtitles to avoid overlapping with burnt-in text in the video.
+
+    Parameters:
+    - video: UploadFile (required). The video file used to detect burnt-in text.
+    - subtitle: UploadFile (required). The subtitle file (.srt, .ass, .ssa, .vtt) to be repositioned.
+    - min_frames: int (optional). Number of frames to sample per subtitle segment for OCR-based top/bottom decision. Default is 3.
+
+    Returns:
+    - FileResponse: The repositioned subtitle file. For SRT inputs, output will be an ASS file; other formats are updated in-place where possible.
+    """
+    try:
+        # Validate video
+        if not video.content_type or not video.content_type.startswith("video/"):
+            raise HTTPException(status_code=422, detail="Invalid video file format")
+
+        # Validate subtitle extension
+        allowed_extensions = ['.srt', '.vtt', '.ass', '.ssa']
+        sub_ext = os.path.splitext(subtitle.filename)[1].lower()
+        if sub_ext not in allowed_extensions:
+            raise HTTPException(status_code=422, detail=f"Invalid subtitle file format. Allowed: {', '.join(allowed_extensions)}")
+
+        # Save uploads
+        video_path = save_uploaded_file(video, UPLOAD_DIR)
+        subtitle_path = save_uploaded_file(subtitle, UPLOAD_DIR)
+
+        # Process repositioning
+        result_path = process_subtitle(video_path, subtitle_path, min_frames=min_frames)
+
+        # Return file response
+        return FileResponse(
+            path=result_path,
+            filename=os.path.basename(result_path),
+            media_type="text/plain"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Repositioning failed")
+        raise HTTPException(status_code=500, detail=f"Repositioning failed: {e}")
 
 if __name__ == "__main__":
     import uvicorn
