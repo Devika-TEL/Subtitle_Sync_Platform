@@ -225,4 +225,13 @@ export const registerUser = async (userData) => {
   }
 };
 
+/** PUBLIC_INTERFACE
+ * Call backend hello endpoint for connectivity test.
+ * @returns {Promise<{message: string}>} - Hello response
+ */
+export const testBackend = async () => {
+  const res = await api.get('/api/hello');
+  return res.data;
+};
+
 export default api;

@@ -56,6 +56,7 @@ app = FastAPI(
         {"name": "subtitles", "description": "Subtitle processing operations"},
         {"name": "jobs", "description": "Asynchronous job management"},
         {"name": "files", "description": "Access processed files"},
+        {"name": "test", "description": "Simple testing utilities for connectivity"},
     ],
 )
 
@@ -378,6 +379,23 @@ def download_file(filename: str):
 def websocket_usage_note():
     """Provide documentation about real-time update strategy."""
     return {"websocket": "not-available", "strategy": "use /jobs/{job_id} polling for updates."}
+
+
+@app.get(
+    "/api/hello",
+    tags=["test"],
+    summary="Test connectivity endpoint",
+    description="A simple endpoint to verify frontend-backend connectivity. Returns a static message.",
+    response_description="A JSON object containing a hello message",
+)
+# PUBLIC_INTERFACE
+def hello() -> Dict[str, str]:
+    """Return a static hello message for quick connectivity testing.
+
+    Returns:
+        Dict[str, str]: JSON object with 'message': 'hello'
+    """
+    return {"message": "hello"}
 
 
 if __name__ == "__main__":
