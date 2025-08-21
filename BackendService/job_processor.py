@@ -1,95 +1,67 @@
 """
-Background job processor for handling subtitle processing tasks
+Simple in-memory job queue to simulate asynchronous processing.
+
+For production, replace with a persistent queue and worker system (e.g., Celery, RQ/Redis).
 """
 
-import asyncio
-import logging
-from typing import Dict, Optional, Any
-from datetime import datetime
-import threading
-import queue
-import time
+from dataclasses import dataclass, field
+from enum import Enum
+from threading import Thread, Lock
+from typing import Callable, Optional, List, Dict
+import uuid
+import traceback
 
-logger = logging.getLogger(__name__)
 
-class JobProcessor:
-    """Background job processor for managing subtitle processing tasks"""
-    
-    def __init__(self):
-        self.jobs: Dict[str, Dict[str, Any]] = {}
-        self.job_queue = queue.Queue()
-        self.worker_thread = None
-        self.running = False
-        self._lock = threading.Lock()
-    
-    def start(self):
-        """Start the job processor"""
-        if not self.running:
-            self.running = True
-            self.worker_thread = threading.Thread(target=self._worker, daemon=True)
-            self.worker_thread.start()
-            logger.info("Job processor started")
-    
-    def stop(self):
-        """Stop the job processor"""
-        self.running = False
-        if self.worker_thread:
-            self.worker_thread.join(timeout=5)
-        logger.info("Job processor stopped")
-    
-    async def shutdown(self):
-        """Async shutdown method"""
-        self.stop()
-    
-    def _worker(self):
-        """Worker thread for processing jobs"""
-        while self.running:
+class JobStatus(Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    FAILED = "FAILED"
+    COMPLETED = "COMPLETED"
+
+
+@dataclass
+class JobRecord:
+    job_id: str
+    description: str
+    meta: Dict
+    status: JobStatus = JobStatus.QUEUED
+    message: Optional[str] = None
+    result_files: Optional[List[str]] = None
+
+
+class JobQueue:
+    def __init__(self, process_dir: str):
+        self._jobs: Dict[str, JobRecord] = {}
+        self._lock = Lock()
+        self._process_dir = process_dir
+
+    # PUBLIC_INTERFACE
+    def enqueue(self, fn: Callable[[], List[str]], description: str = "", meta: Optional[Dict] = None) -> str:
+        """Enqueue a function to be executed on a background thread. Returns a job id."""
+        job_id = uuid.uuid4().hex
+        rec = JobRecord(job_id=job_id, description=description, meta=meta or {})
+        with self._lock:
+            self._jobs[job_id] = rec
+
+        def runner():
+            with self._lock:
+                self._jobs[job_id].status = JobStatus.RUNNING
             try:
-                time.sleep(0.1)  # Small delay to prevent busy waiting
-                # Process any queued jobs (placeholder for future implementation)
+                result_files = fn()
+                with self._lock:
+                    self._jobs[job_id].status = JobStatus.COMPLETED
+                    self._jobs[job_id].result_files = result_files
+                    self._jobs[job_id].message = "Done"
             except Exception as e:
-                logger.error(f"Job processor worker error: {e}")
-    
-    def update_job_status(self, job_id: str, status: str, progress: int = 0, message: str = ""):
-        """Update job status and progress"""
-        with self._lock:
-            if job_id not in self.jobs:
-                self.jobs[job_id] = {
-                    "id": job_id,
-                    "created_at": datetime.now()
-                }
-            
-            self.jobs[job_id].update({
-                "status": status,
-                "progress": progress,
-                "message": message,
-                "updated_at": datetime.now()
-            })
-            
-            if status in ["completed", "failed"]:
-                self.jobs[job_id]["completed_at"] = datetime.now()
-        
-        logger.info(f"Job {job_id} status updated: {status} ({progress}%) - {message}")
-    
-    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Get current job status"""
-        with self._lock:
-            return self.jobs.get(job_id)
-    
-    def remove_job(self, job_id: str):
-        """Remove completed job from memory"""
-        with self._lock:
-            if job_id in self.jobs:
-                del self.jobs[job_id]
-                logger.info(f"Job {job_id} removed from processor")
-    
-    def get_all_jobs(self) -> Dict[str, Dict[str, Any]]:
-        """Get all jobs (for debugging/monitoring)"""
-        with self._lock:
-            return self.jobs.copy()
+                with self._lock:
+                    self._jobs[job_id].status = JobStatus.FAILED
+                    self._jobs[job_id].message = f"{e}\n{traceback.format_exc()}"
 
-# Global job processor instance
-job_processor = JobProcessor()
+        Thread(target=runner, daemon=True).start()
+        return job_id
 
-# Start the processor when module is imported
-job_processor.start()
+    # PUBLIC_INTERFACE
+    def get_status(self, job_id: str) -> Optional[JobRecord]:
+        """Retrieve the status of a submitted job."""
+        with self._lock:
+            return self._jobs.get(job_id)

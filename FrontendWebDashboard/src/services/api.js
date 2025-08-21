@@ -1,7 +1,18 @@
 import axios from 'axios';
 
-// Get base URL from environment variable, fallback to new backend URL
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://vscode-internal-29567-beta.beta01.cloud.kavia.ai/proxy/8000/';
+/**
+ * API base URL is read from environment variable REACT_APP_API_BASE_URL.
+ * There is no hard-coded fallback to avoid accidentally calling the wrong backend.
+ * Ensure .env defines REACT_APP_API_BASE_URL. See .env.example.
+ */
+const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/+$/, '');
+if (!API_BASE_URL) {
+  // Provide a helpful warning in development; in production this remains silent.
+  if (process.env.NODE_ENV !== 'production') {
+    // eslint-disable-next-line no-console
+    console.warn('REACT_APP_API_BASE_URL is not set. API calls will likely fail. Configure it in a .env file.');
+  }
+}
 
 // Debug logging for API configuration
 if (process.env.NODE_ENV === 'development') {
@@ -212,6 +223,15 @@ export const registerUser = async (userData) => {
     console.error('Error during registration:', error);
     throw error;
   }
+};
+
+/** PUBLIC_INTERFACE
+ * Call backend hello endpoint for connectivity test.
+ * @returns {Promise<{message: string}>} - Hello response
+ */
+export const testBackend = async () => {
+  const res = await api.get('/api/hello');
+  return res.data;
 };
 
 export default api;

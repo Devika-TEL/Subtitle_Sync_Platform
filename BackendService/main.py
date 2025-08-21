@@ -1,624 +1,409 @@
 """
-FastAPI Backend Service for Subtitle Sync Platform
-Provides comprehensive subtitle processing, validation, generation, and translation services.
+FastAPI Backend Service for Subtitle-Audio Synchronization Platform.
+
+This service provides endpoints for:
+- Subtitle quality check and auto-correction
+- Subtitle generation from video
+- Subtitle translation
+- Subtitle validation and format conversion
+- Job status querying and file retrieval
+
+The service is configured via environment variables (see config.py).
+
+Developer note:
+- A programmatic utility is available in subtitle_reposition.py for repositioning subtitles
+  to avoid hardcoded text using OCR-based analysis. See README for usage.
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse, JSONResponse
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Union
-import sqlite3
 import os
-import tempfile
-import shutil
-import json
 import uuid
-import asyncio
-from datetime import datetime, timedelta
-import logging
+import shutil
 from pathlib import Path
-import subprocess
-import re
-import hashlib
-import jwt
-from subtitle_processor import subtitle_processor
-from middleware import FileSizeMiddleware, CORSHeadersMiddleware
-from auth import UserAuth, session_manager
-from database import db_manager, get_db_connection
-from job_processor import job_processor
-from file_utils import file_manager
 
-# Configure comprehensive logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('backend.log')
-    ]
+from config import get_settings, Settings
+from middleware import add_process_time_header
+from file_utils import (
+    save_temp_upload,
+    ensure_dir,
+    allowed_subtitle_extension,
+    guess_subtitle_format,
 )
-logger = logging.getLogger(__name__)
+from subtitle_processor import (
+    run_quality_check_and_correct,
+    generate_subtitles_for_video,
+    translate_subtitles,
+    validate_subtitles,
+)
+from subtitle_correction import apply_additional_compliance_fixes
+from job_processor import JobQueue, JobStatus
 
-# Initialize FastAPI app
+# Initialize FastAPI app with metadata and tags for OpenAPI docs
 app = FastAPI(
-    root_path="/proxy/8000",
-    title="Subtitle Sync Backend API",
-    description="Comprehensive API for subtitle-audio synchronization, generation, validation, correction, and translation services. Frontend dashboard available at: https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001",
+    title="Subtitle Sync Platform - Backend Service",
+    description=(
+        "Backend API for subtitle-audio synchronization, subtitle generation, "
+        "translation, and validation. Supports multiple formats and languages. "
+        "Use these endpoints from the Frontend Web Dashboard or programmatically."
+    ),
     version="1.0.0",
     openapi_tags=[
-        {
-            "name": "processing",
-            "description": "Subtitle upload, processing, correction, and generation operations"
-        },
-        {
-            "name": "subtitles",
-            "description": "Subtitle file management, download, and translation operations"
-        },
-        {
-            "name": "jobs",
-            "description": "Job tracking and progress monitoring"
-        },
-        {
-            "name": "auth",
-            "description": "User authentication and registration"
-        },
-        {
-            "name": "admin",
-            "description": "Administrative operations and audit logs"
-        }
-    ]
+        {"name": "health", "description": "Health and service metadata"},
+        {"name": "subtitles", "description": "Subtitle processing operations"},
+        {"name": "jobs", "description": "Asynchronous job management"},
+        {"name": "files", "description": "Access processed files"},
+        {"name": "test", "description": "Simple testing utilities for connectivity"},
+    ],
 )
 
-# CORS middleware for frontend integration
+# CORS configuration via env
+settings: Settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3000",
-        "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001", 
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ],
+    allow_origins=settings.CORS_ALLOW_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
 
-# Add custom middlewares
-app.add_middleware(CORSHeadersMiddleware)
-app.add_middleware(FileSizeMiddleware, max_upload_size=2 * 1024 * 1024 * 1024)  # 2GB limit
+# Add process time header middleware
+app.middleware("http")(add_process_time_header)
 
-# Security
-security = HTTPBearer(auto_error=False)
+# Ensure working directories
+ensure_dir(settings.UPLOAD_DIR)
+ensure_dir(settings.PROCESSED_DIR)
+ensure_dir(settings.WORK_DIR)
 
-# Database configuration
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), "..", "Database", "subtitle_sync_platform.db")
-UPLOAD_DIR = "uploads"
-PROCESSED_DIR = "processed"
+# Initialize an in-memory job queue (can be replaced with Redis/RQ, Celery, etc.)
+job_queue = JobQueue(process_dir=settings.PROCESSED_DIR)
 
-# Ensure directories exist
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-# JWT configuration
-JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
-JWT_ALGORITHM = "HS256"
+class LanguagePair(BaseModel):
+    source: str = Field(..., description="Source language code (ISO-639-1) e.g., 'en'")
+    target: str = Field(..., description="Target language code (ISO-639-1) e.g., 'es'")
 
-# Pydantic models
-class UserRegister(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., regex=r'^[^@]+@[^@]+\.[^@]+$')
-    password: str = Field(..., min_length=6)
-    role: str = Field(default="user")
 
-class UserLogin(BaseModel):
-    email: str
-    password: str
+class GenerationRequest(BaseModel):
+    language: Optional[str] = Field(
+        None, description="Language code for generation (defaults to auto-detect)"
+    )
+    translate_to: Optional[List[str]] = Field(
+        None,
+        description="Optional list of language codes to also translate generated subtitles into",
+    )
+    model_hint: Optional[str] = Field(
+        None, description="Optional model hint for LLM/STT provider"
+    )
 
-class JobStatus(BaseModel):
-    id: str
-    status: str
-    progress: int = 0
-    message: str = ""
-    result_url: Optional[str] = None
-    created_at: datetime
-    completed_at: Optional[datetime] = None
-
-class SubtitleFile(BaseModel):
-    id: int
-    filename: str
-    language: str
-    size: int = 0
-    created_at: datetime
-    processed: bool = False
-    video_id: Optional[int] = None
 
 class TranslationRequest(BaseModel):
-    target_language: str = Field(..., min_length=2, max_length=5)
+    source_language: Optional[str] = Field(
+        None, description="Source language code if known, otherwise auto-detect"
+    )
+    target_language: str = Field(..., description="Target language code (ISO-639-1)")
+    model_hint: Optional[str] = Field(
+        None, description="Optional model hint for translation provider"
+    )
 
-# Request logging middleware
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all incoming requests and responses"""
-    start_time = datetime.now()
-    
-    # Log request details
-    logger.info(f"REQUEST: {request.method} {request.url.path} - "
-                f"Query: {dict(request.query_params)} - "
-                f"Client: {request.client.host if request.client else 'unknown'}")
-    
-    # Process request
-    response = await call_next(request)
-    
-    # Calculate processing time
-    process_time = (datetime.now() - start_time).total_seconds()
-    
-    # Log response details
-    logger.info(f"RESPONSE: {request.method} {request.url.path} - "
-                f"Status: {response.status_code} - "
-                f"Time: {process_time:.3f}s")
-    
-    # Add processing time header
-    response.headers["X-Process-Time"] = str(process_time)
-    
-    return response
 
-# Authentication helpers
-def create_jwt_token(user_data: dict) -> str:
-    """Create JWT token for user"""
-    payload = {
-        "user_id": user_data.get("id"),
-        "email": user_data.get("email"),
-        "exp": datetime.utcnow() + timedelta(days=7)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+class ValidationOptions(BaseModel):
+    max_chars_per_line: Optional[int] = Field(
+        42, description="Maximum characters per line to validate against"
+    )
+    max_lines_per_caption: Optional[int] = Field(
+        2, description="Maximum number of lines per caption"
+    )
+    min_caption_duration_ms: Optional[int] = Field(
+        800, description="Minimum caption duration in milliseconds"
+    )
+    max_caption_duration_ms: Optional[int] = Field(
+        8000, description="Maximum caption duration in milliseconds"
+    )
+    reading_speed_cps: Optional[int] = Field(
+        17, description="Reading speed threshold in characters per second"
+    )
+    frame_rate: Optional[float] = Field(
+        None, description="Frame rate to validate against if applicable"
+    )
+    language: Optional[str] = Field(
+        None, description="Language code for spell/grammar checks, if used"
+    )
 
-def verify_jwt_token(token: str) -> dict:
-    """Verify and decode JWT token"""
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
-    """Get current authenticated user"""
-    if not credentials:
-        return None
-    
-    try:
-        payload = verify_jwt_token(credentials.credentials)
-        return payload
-    except HTTPException:
-        return None
+class ValidationResponse(BaseModel):
+    valid: bool = Field(..., description="Whether the subtitle file passed validation")
+    issues: List[str] = Field(..., description="List of validation issues found, if any")
+    format: Optional[str] = Field(None, description="Detected or specified subtitle format")
 
-# File processing helpers
-def generate_job_id() -> str:
-    """Generate unique job ID"""
-    return str(uuid.uuid4())
 
-def save_uploaded_file(file: UploadFile, directory: str) -> str:
-    """Save uploaded file and return path"""
-    file_id = str(uuid.uuid4())
-    file_extension = os.path.splitext(file.filename)[1]
-    filename = f"{file_id}_{file.filename}"
-    file_path = os.path.join(directory, filename)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    return file_path
+class JobResponse(BaseModel):
+    job_id: str = Field(..., description="Identifier for the queued job")
+    status: str = Field(..., description="Initial job status (e.g., QUEUED)")
 
-async def process_subtitle_task(job_id: str, video_path: str, subtitle_path: str = None, language: str = "en"):
-    """Background task for processing subtitles"""
-    try:
-        # Update job status to processing
-        job_processor.update_job_status(job_id, "processing", 25, "Processing files...")
-        
-        if subtitle_path:
-            # Correction workflow
-            logger.info(f"Starting subtitle correction for job {job_id}")
-            result_path = subtitle_processor.correct_subtitles(video_path, subtitle_path)
-            job_processor.update_job_status(job_id, "processing", 75, "Finalizing correction...")
-        else:
-            # Generation workflow
-            logger.info(f"Starting subtitle generation for job {job_id}")
-            result_path = subtitle_processor.generate_subtitles(video_path, language)
-            job_processor.update_job_status(job_id, "processing", 75, "Finalizing generation...")
-        
-        # Save result to database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE jobs SET status = ?, result_url = ?, completed_at = ? WHERE id = ?",
-            ("completed", result_path, datetime.now(), job_id)
-        )
-        conn.commit()
-        conn.close()
-        
-        job_processor.update_job_status(job_id, "completed", 100, "Processing completed successfully")
-        logger.info(f"Job {job_id} completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Job {job_id} failed: {str(e)}")
-        job_processor.update_job_status(job_id, "failed", 0, f"Processing failed: {str(e)}")
-        
-        # Update database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE jobs SET status = ?, completed_at = ? WHERE id = ?",
-            ("failed", datetime.now(), job_id)
-        )
-        conn.commit()
-        conn.close()
 
-# API Endpoints
+class JobStatusResponse(BaseModel):
+    job_id: str = Field(..., description="Job identifier")
+    status: str = Field(..., description="Current job status")
+    message: Optional[str] = Field(None, description="Optional status message")
+    result_files: Optional[List[str]] = Field(
+        None, description="List of file paths (relative) produced by the job"
+    )
 
-@app.get("/", tags=["general"])
-async def root():
+
+def _save_upload(file: UploadFile, dst_dir: str) -> Path:
     """
-    Root endpoint - API health check and information
+    Internal helper to save an UploadFile to a destination directory with a temp name.
     """
+    ensure_dir(dst_dir)
+    suffix = Path(file.filename or "").suffix
+    temp_name = f"temp_{uuid.uuid4().hex}{suffix}"
+    dst_path = Path(dst_dir) / temp_name
+    with open(dst_path, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    return dst_path
+
+
+@app.get("/health", tags=["health"], summary="Health check", description="Service liveness and configuration sanity probe.")
+# PUBLIC_INTERFACE
+def health() -> Dict[str, str]:
+    """Return basic health info and environment-driven configuration status."""
     return {
-        "message": "Subtitle Sync Backend API",
-        "version": "1.0.0",
-        "status": "operational",
-        "endpoints": {
-            "docs": "/docs",
-            "openapi": "/openapi.json",
-            "frontend": "https://vscode-internal-29567-beta.beta01.cloud.kavia.ai:3001"
-        }
+        "status": "ok",
+        "service": "Subtitle Sync Backend",
+        "version": app.version,
+        "upload_dir": str(settings.UPLOAD_DIR),
+        "processed_dir": str(settings.PROCESSED_DIR),
     }
 
-@app.post("/process", tags=["processing"])
-async def process_files(
-    background_tasks: BackgroundTasks,
-    video: UploadFile = File(..., description="Video file for processing"),
-    subtitle: Optional[UploadFile] = File(None, description="Subtitle file for correction (optional)"),
-    language: str = Form("en", description="Target language for subtitle generation")
+
+@app.post(
+    "/subtitles/quality-check",
+    tags=["subtitles"],
+    summary="Run quality check and auto-correct a subtitle file",
+    description="Upload a subtitle file with an optional related video file to perform quality checks and automatic corrections. Returns a job id.",
+    response_model=JobResponse,
+)
+# PUBLIC_INTERFACE
+async def subtitles_quality_check(
+    subtitle_file: UploadFile = File(..., description="Subtitle file to validate and correct"),
+    video_file: Optional[UploadFile] = File(None, description="Optional video for reference-based checks"),
+    language: Optional[str] = Form(None, description="Language code if known"),
+    enforce_ott_compliance: bool = Form(True, description="Apply OTT compliance rules"),
 ):
-    """
-    Process video and subtitle files for correction or generation
-    
-    - **video**: Video file (required)
-    - **subtitle**: Subtitle file (optional - if provided, correction mode)
-    - **language**: Target language for generation (default: en)
-    
-    Returns either direct processed file or job ID for tracking
-    """
-    try:
-        logger.info(f"Processing request: video={video.filename}, subtitle={subtitle.filename if subtitle else None}, language={language}")
-        
-        # Validate video file
-        if not video.content_type.startswith('video/'):
-            raise HTTPException(status_code=422, detail="Invalid video file format")
-        
-        # Validate subtitle file if provided
-        if subtitle:
-            allowed_extensions = ['.srt', '.vtt', '.ass', '.ssa', '.scc', '.sub', '.smi']
-            file_ext = os.path.splitext(subtitle.filename)[1].lower()
-            if file_ext not in allowed_extensions:
-                raise HTTPException(status_code=422, detail=f"Invalid subtitle file format. Allowed: {', '.join(allowed_extensions)}")
-        
-        # Save uploaded files
-        video_path = save_uploaded_file(video, UPLOAD_DIR)
-        subtitle_path = save_uploaded_file(subtitle, UPLOAD_DIR) if subtitle else None
-        
-        # Create job record
-        job_id = generate_job_id()
-        job_type = "correction" if subtitle else "generation"
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO jobs (id, job_type, status, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (job_id, job_type, "queued", datetime.now()))
-        conn.commit()
-        conn.close()
-        
-        # Start background processing
-        background_tasks.add_task(process_subtitle_task, job_id, video_path, subtitle_path, language)
-        
-        # For now, return job ID for tracking
-        job_processor.update_job_status(job_id, "queued", 0, "Job queued for processing")
-        
-        return {
-            "job_id": job_id,
-            "status": "queued",
-            "message": f"{'Correction' if subtitle else 'Generation'} job started"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Process files error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+    """Enqueue a job to run quality checks and corrections on the provided subtitle file."""
+    if not allowed_subtitle_extension(subtitle_file.filename):
+        raise HTTPException(status_code=400, detail="Unsupported subtitle file extension.")
 
-@app.get("/jobs/{job_id}/status", tags=["jobs"])
-async def get_job_status(job_id: str):
-    """
-    Get status of a processing job
-    
-    - **job_id**: Unique job identifier
-    
-    Returns current job status, progress, and result information
-    """
-    try:
-        # Get status from job processor
-        status = job_processor.get_job_status(job_id)
-        if not status:
-            # Check database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
-            job = cursor.fetchone()
-            conn.close()
-            
-            if not job:
-                raise HTTPException(status_code=404, detail="Job not found")
-            
-            return {
-                "id": job["id"],
-                "status": job["status"],
-                "progress": 100 if job["status"] == "completed" else 0,
-                "message": f"Job {job['status']}",
-                "result_url": job["result_url"],
-                "created_at": job["created_at"],
-                "completed_at": job["completed_at"]
-            }
-        
-        return status
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Get job status error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get job status")
+    # Save uploads
+    sub_path = _save_upload(subtitle_file, settings.UPLOAD_DIR)
+    vid_path = _save_upload(video_file, settings.UPLOAD_DIR) if video_file else None
+    detected_format = guess_subtitle_format(sub_path)
 
-@app.get("/subtitles", tags=["subtitles"])
-async def get_subtitle_files(current_user: dict = Depends(get_current_user)):
-    """
-    Get list of user's subtitle files
-    
-    Returns array of subtitle file objects with metadata
-    """
-    try:
-        # For now, return all processed files (in production, filter by user)
-        processed_files = []
-        
-        if os.path.exists(PROCESSED_DIR):
-            for filename in os.listdir(PROCESSED_DIR):
-                file_path = os.path.join(PROCESSED_DIR, filename)
-                if os.path.isfile(file_path):
-                    stat = os.stat(file_path)
-                    processed_files.append({
-                        "id": hash(filename) % 10000,  # Simple ID generation
-                        "filename": filename,
-                        "language": "en",  # Default language
-                        "size": stat.st_size,
-                        "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                        "processed": True
-                    })
-        
-        return processed_files
-        
-    except Exception as e:
-        logger.error(f"Get subtitle files error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get subtitle files")
+    def job_fn():
+        corrected = run_quality_check_and_correct(
+            subtitle_path=str(sub_path),
+            video_path=str(vid_path) if vid_path else None,
+            language=language,
+            enforce_ott=enforce_ott_compliance,
+            processed_dir=str(settings.PROCESSED_DIR),
+        )
+        # Optional post-correction compliance adjustments
+        final_path = apply_additional_compliance_fixes(corrected, processed_dir=str(settings.PROCESSED_DIR))
+        return [os.path.relpath(final_path, settings.PROCESSED_DIR)]
 
-@app.get("/subtitles/{file_id}/download", tags=["subtitles"])
-async def download_subtitle_file(file_id: int, current_user: dict = Depends(get_current_user)):
-    """
-    Download a subtitle file by ID
-    
-    - **file_id**: File identifier
-    
-    Returns the subtitle file as a download
-    """
-    try:
-        # Find file by ID (simple implementation)
-        if os.path.exists(PROCESSED_DIR):
-            for filename in os.listdir(PROCESSED_DIR):
-                if hash(filename) % 10000 == file_id:
-                    file_path = os.path.join(PROCESSED_DIR, filename)
-                    if os.path.isfile(file_path):
-                        return FileResponse(
-                            path=file_path,
-                            filename=filename,
-                            media_type='text/plain'
-                        )
-        
+    job_id = job_queue.enqueue(job_fn, description="quality_check", meta={"format": detected_format, "language": language})
+    return JobResponse(job_id=job_id, status=JobStatus.QUEUED.value)
+
+
+@app.post(
+    "/subtitles/generate",
+    tags=["subtitles"],
+    summary="Generate subtitles from a video",
+    description="Upload a video to generate subtitles. Optionally specify generation language and translations to produce.",
+    response_model=JobResponse,
+)
+# PUBLIC_INTERFACE
+async def subtitles_generate(
+    video_file: UploadFile = File(..., description="Video file to generate subtitles from"),
+    language: Optional[str] = Form(None, description="Language code for generation (auto-detect if omitted)"),
+    translate_to: Optional[str] = Form(None, description="Comma-separated list of target languages for translation"),
+    model_hint: Optional[str] = Form(None, description="Optional model hint for STT/LLM"),
+):
+    """Enqueue a job to generate subtitles in the requested language and optional translations."""
+    vid_path = _save_upload(video_file, settings.UPLOAD_DIR)
+    translate_list = [x.strip() for x in (translate_to or "").split(",") if x.strip()]
+
+    def job_fn():
+        generated_path = generate_subtitles_for_video(
+            video_path=str(vid_path),
+            language=language,
+            processed_dir=str(settings.PROCESSED_DIR),
+            model_hint=model_hint,
+        )
+        result_files = [os.path.relpath(generated_path, settings.PROCESSED_DIR)]
+        # Translations
+        for tgt in translate_list:
+            translated = translate_subtitles(
+                subtitle_path=generated_path,
+                target_language=tgt,
+                source_language=language,
+                processed_dir=str(settings.PROCESSED_DIR),
+                model_hint=model_hint,
+            )
+            result_files.append(os.path.relpath(translated, settings.PROCESSED_DIR))
+        return result_files
+
+    job_id = job_queue.enqueue(job_fn, description="generate", meta={"language": language, "translate_to": translate_list})
+    return JobResponse(job_id=job_id, status=JobStatus.QUEUED.value)
+
+
+@app.post(
+    "/subtitles/translate",
+    tags=["subtitles"],
+    summary="Translate a subtitle file",
+    description="Upload an existing subtitle file and request translation into a target language.",
+    response_model=JobResponse,
+)
+# PUBLIC_INTERFACE
+async def subtitles_translate(
+    subtitle_file: UploadFile = File(..., description="Subtitle file to translate"),
+    target_language: str = Form(..., description="Target language code"),
+    source_language: Optional[str] = Form(None, description="Source language code if known"),
+    model_hint: Optional[str] = Form(None, description="Optional model hint"),
+):
+    """Enqueue a job to translate a subtitle file into a target language."""
+    if not allowed_subtitle_extension(subtitle_file.filename):
+        raise HTTPException(status_code=400, detail="Unsupported subtitle file extension.")
+    sub_path = _save_upload(subtitle_file, settings.UPLOAD_DIR)
+
+    def job_fn():
+        out_path = translate_subtitles(
+            subtitle_path=str(sub_path),
+            target_language=target_language,
+            source_language=source_language,
+            processed_dir=str(settings.PROCESSED_DIR),
+            model_hint=model_hint,
+        )
+        return [os.path.relpath(out_path, settings.PROCESSED_DIR)]
+
+    job_id = job_queue.enqueue(job_fn, description="translate", meta={"target": target_language, "source": source_language})
+    return JobResponse(job_id=job_id, status=JobStatus.QUEUED.value)
+
+
+@app.post(
+    "/subtitles/validate",
+    tags=["subtitles"],
+    summary="Validate a subtitle file",
+    description="Upload a subtitle file and validate it against configurable constraints and OTT rules.",
+    response_model=ValidationResponse,
+)
+# PUBLIC_INTERFACE
+async def subtitles_validate(
+    subtitle_file: UploadFile = File(..., description="Subtitle file to validate"),
+    max_chars_per_line: int = Form(42),
+    max_lines_per_caption: int = Form(2),
+    min_caption_duration_ms: int = Form(800),
+    max_caption_duration_ms: int = Form(8000),
+    reading_speed_cps: int = Form(17),
+    frame_rate: Optional[float] = Form(None),
+    language: Optional[str] = Form(None),
+):
+    """Validate a subtitle file with configurable parameters."""
+    if not allowed_subtitle_extension(subtitle_file.filename):
+        raise HTTPException(status_code=400, detail="Unsupported subtitle file extension.")
+    sub_path = _save_upload(subtitle_file, settings.UPLOAD_DIR)
+    detected_format = guess_subtitle_format(sub_path)
+
+    issues = validate_subtitles(
+        subtitle_path=str(sub_path),
+        options=dict(
+            max_chars_per_line=max_chars_per_line,
+            max_lines_per_caption=max_lines_per_caption,
+            min_caption_duration_ms=min_caption_duration_ms,
+            max_caption_duration_ms=max_caption_duration_ms,
+            reading_speed_cps=reading_speed_cps,
+            frame_rate=frame_rate,
+            language=language,
+        ),
+    )
+    return ValidationResponse(valid=len(issues) == 0, issues=issues, format=detected_format)
+
+
+@app.get(
+    "/jobs/{job_id}",
+    tags=["jobs"],
+    summary="Get job status",
+    description="Retrieve the status and results (if any) of a previously submitted job.",
+    response_model=JobStatusResponse,
+)
+# PUBLIC_INTERFACE
+def get_job_status(job_id: str):
+    """Return the status of the job and any produced files."""
+    status = job_queue.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobStatusResponse(
+        job_id=job_id,
+        status=status.status.value,
+        message=status.message,
+        result_files=status.result_files,
+    )
+
+
+@app.get(
+    "/files/{filename}",
+    tags=["files"],
+    summary="Download a processed file",
+    description="Download a file produced by a job. The filename should be obtained from the job status result_files.",
+)
+# PUBLIC_INTERFACE
+def download_file(filename: str):
+    """Send a processed file from the processed directory."""
+    safe_path = Path(settings.PROCESSED_DIR) / filename
+    if not safe_path.exists() or not safe_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Download file error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to download file")
+    return FileResponse(path=str(safe_path), filename=safe_path.name, media_type="text/plain")
 
-@app.post("/subtitles/{file_id}/translate", tags=["subtitles"])
-async def request_translation(
-    file_id: int,
-    translation_request: TranslationRequest,
-    background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Request translation of a subtitle file
-    
-    - **file_id**: Source file identifier
-    - **target_language**: Target language code
-    
-    Returns translation job information
-    """
-    try:
-        # Find source file
-        source_file = None
-        if os.path.exists(PROCESSED_DIR):
-            for filename in os.listdir(PROCESSED_DIR):
-                if hash(filename) % 10000 == file_id:
-                    source_file = os.path.join(PROCESSED_DIR, filename)
-                    break
-        
-        if not source_file:
-            raise HTTPException(status_code=404, detail="Source file not found")
-        
-        # Create translation job
-        job_id = generate_job_id()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO jobs (id, job_type, status, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (job_id, "translation", "queued", datetime.now()))
-        conn.commit()
-        conn.close()
-        
-        # For now, just return job info (translation would be implemented later)
-        return {
-            "job_id": job_id,
-            "status": "queued",
-            "message": f"Translation to {translation_request.target_language} queued",
-            "target_language": translation_request.target_language
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Request translation error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to request translation")
 
-@app.post("/auth/register", tags=["auth"])
-async def register_user(user_data: UserRegister):
-    """
-    Register a new user account
-    
-    - **username**: Unique username (3-50 characters)
-    - **email**: Valid email address
-    - **password**: Password (minimum 6 characters)
-    - **role**: User role (default: user)
-    
-    Returns user information and authentication token
-    """
-    try:
-        # Hash password
-        password_hash = hashlib.sha256(user_data.password.encode()).hexdigest()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check if user already exists
-        cursor.execute("SELECT id FROM users WHERE email = ? OR username = ?", 
-                      (user_data.email, user_data.username))
-        if cursor.fetchone():
-            raise HTTPException(status_code=400, detail="User already exists")
-        
-        # Create user
-        cursor.execute("""
-            INSERT INTO users (username, email, password_hash, role)
-            VALUES (?, ?, ?, ?)
-        """, (user_data.username, user_data.email, password_hash, user_data.role))
-        
-        user_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        # Create user object
-        user = {
-            "id": user_id,
-            "username": user_data.username,
-            "email": user_data.email,
-            "role": user_data.role
-        }
-        
-        # Generate token
-        token = create_jwt_token(user)
-        
-        logger.info(f"User registered: {user_data.username} ({user_data.email})")
-        
-        return {
-            "user": user,
-            "token": token,
-            "message": "Registration successful"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Registration failed")
+@app.get(
+    "/docs/websocket",
+    tags=["health"],
+    summary="WebSocket usage note",
+    description="Currently, this service does not expose WebSocket endpoints. For real-time updates, poll the job status endpoint or integrate a message broker.",
+)
+# PUBLIC_INTERFACE
+def websocket_usage_note():
+    """Provide documentation about real-time update strategy."""
+    return {"websocket": "not-available", "strategy": "use /jobs/{job_id} polling for updates."}
 
-@app.post("/auth/login", tags=["auth"])
-async def login_user(credentials: UserLogin):
-    """
-    Authenticate user and return access token
-    
-    - **email**: User email address
-    - **password**: User password
-    
-    Returns authentication token and user information
-    """
-    try:
-        # Hash provided password
-        password_hash = hashlib.sha256(credentials.password.encode()).hexdigest()
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, username, email, role, password_hash
-            FROM users WHERE email = ?
-        """, (credentials.email,))
-        
-        user_row = cursor.fetchone()
-        conn.close()
-        
-        if not user_row or user_row["password_hash"] != password_hash:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-        # Create user object
-        user = {
-            "id": user_row["id"],
-            "username": user_row["username"],
-            "email": user_row["email"],
-            "role": user_row["role"]
-        }
-        
-        # Generate token
-        token = create_jwt_token(user)
-        
-        logger.info(f"User logged in: {user['username']} ({user['email']})")
-        
-        return {
-            "user": user,
-            "token": token,
-            "message": "Login successful"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Login failed")
 
-@app.get("/health", tags=["general"])
-async def health_check():
+@app.get(
+    "/api/hello",
+    tags=["test"],
+    summary="Test connectivity endpoint",
+    description="A simple endpoint to verify frontend-backend connectivity. Returns a static message.",
+    response_description="A JSON object containing a hello message",
+)
+# PUBLIC_INTERFACE
+def hello() -> Dict[str, str]:
+    """Return a static hello message for quick connectivity testing.
+
+    Returns:
+        Dict[str, str]: JSON object with 'message': 'hello'
     """
-    Health check endpoint for monitoring
-    """
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
-    }
+    return {"message": "hello"}
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG,
+    )

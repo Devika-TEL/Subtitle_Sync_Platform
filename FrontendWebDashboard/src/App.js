@@ -14,7 +14,8 @@ import {
   getSubtitleFiles,
   downloadSubtitleFile,
   requestTranslation,
-  authenticateUser
+  authenticateUser,
+  testBackend
 } from './services/api';
 
 // Utils
@@ -396,6 +397,24 @@ const Dashboard = () => {
                 {subtitleFiles.length > 0 && (
                   <span className="file-count">{subtitleFiles.length}</span>
                 )}
+              </button>
+              <button
+                className="header-btn files-btn"
+                onClick={async () => {
+                  try {
+                    const data = await testBackend();
+                    // Show result as alert for quick visibility
+                    alert(`Backend says: ${data?.message ?? 'no message'}`);
+                  } catch (e) {
+                    alert('Backend test failed. Check console for details.');
+                    console.error('Test Backend error:', e);
+                  }
+                }}
+                aria-label="Test Backend"
+                title="Test Backend"
+              >
+                <span className="btn-icon">🧪</span>
+                <span>Test Backend</span>
               </button>
               <button
                 className="header-btn logout-btn"
