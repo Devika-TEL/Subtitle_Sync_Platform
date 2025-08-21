@@ -23,6 +23,15 @@ import os
 from pathlib import Path
 from typing import List
 
+# Load environment variables from a .env file if present.
+# This enables local development without exporting vars manually.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    # dotenv is optional; if not available, the environment must provide vars.
+    pass
+
 
 @dataclass
 class Settings:
