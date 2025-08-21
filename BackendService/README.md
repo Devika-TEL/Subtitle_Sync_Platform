@@ -41,3 +41,36 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
+
+## Programmatic API: Reposition Subtitles to Avoid Hardcoded Text
+
+A new utility entry point is available for developers who want to programmatically reposition subtitles to avoid overlap with burnt-in (hardcoded) text:
+
+- Function: reposition_subtitles_based_on_hardcoded_text(video_path, subtitle_path, output_path=None, processed_dir="./processed", sample_rate=1.0)
+- Supported Formats: SRT, ASS/SSA, VTT
+- Behavior:
+  - Analyzes the video for persistent hardcoded text and chooses a safer subtitle position (top/bottom) per file.
+  - SRT: Inserts a comment hint "NOTE: position=<top|bottom>" within each block (portable hint). 
+  - VTT: Adds/updates cue settings (e.g., line:0 for top, line:90 for bottom).
+  - ASS/SSA: Attempts to adjust style alignment (top=8, bottom=2); if style update is not possible, appends a note comment.
+
+Example usage:
+```python
+from subtitle_reposition import reposition_subtitles_based_on_hardcoded_text
+
+output_path = reposition_subtitles_based_on_hardcoded_text(
+    video_path="input.mp4",
+    subtitle_path="captions.srt",
+    output_path=None,            # write into processed dir
+    processed_dir="./processed",
+    sample_rate=1.0,             # FPS for OCR sampling (stubbed here)
+)
+print("Repositioned file at:", output_path)
+```
+
+Command-line:
+```bash
+python -m Subtitle_Sync_Platform.BackendService.subtitle_reposition --video input.mp4 --subs captions.ass --processed-dir ./processed
+```
+
+Implementation note: The OCR routine is stubbed for CI determinism. Replace it with RapidOCR-based frame analysis in production.

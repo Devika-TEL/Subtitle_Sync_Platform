@@ -9,6 +9,10 @@ This service provides endpoints for:
 - Job status querying and file retrieval
 
 The service is configured via environment variables (see config.py).
+
+Developer note:
+- A programmatic utility is available in subtitle_reposition.py for repositioning subtitles
+  to avoid hardcoded text using OCR-based analysis. See README for usage.
 """
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
