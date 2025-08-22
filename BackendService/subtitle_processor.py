@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional, List, Dict
 import uuid
 import re
+# The create_subtitles function is available in subtitle_generation module for direct use
+# from subtitle_generation import create_subtitles  # optional import point for future integration
 
 
 def _write_processed_stub(basename: str, content: str, processed_dir: str) -> str:
