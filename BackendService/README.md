@@ -41,6 +41,8 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
+- For the standalone subtitle generation script (standalone_subtitle_generation.py), translations are performed using Google Gemini when the target language differs from the detected language. You must set GEMINI_API_KEY in your environment or .env for translation to work. Example .env:
+  GEMINI_API_KEY=your_api_key_here
 
 ## Programmatic API: Reposition Subtitles to Avoid Hardcoded Text
 

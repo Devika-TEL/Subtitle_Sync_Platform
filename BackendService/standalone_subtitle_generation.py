@@ -5,8 +5,8 @@ Standalone Subtitle Generation Script
 This module provides a PUBLIC_INTERFACE function `subtitle_generation(video_path, subtitle_lang, subtitle_format)`
 that:
 1. Uses OpenAI Whisper to transcribe the input video file and auto-detect its language.
-2. If the desired subtitle language differs from the detected language, uses Helsinki-NLP/opus-mt
-   via Hugging Face Transformers to translate each segment to the target language.
+2. If the desired subtitle language differs from the detected language, uses Google Gemini API
+   to translate each segment to the target language.
 3. Formats the result into SRT or VTT as specified.
 4. Saves the output subtitle file in the same folder as the video, named as "<original_filename>.<srt|vtt>".
 5. Can be executed independently as a CLI script for testing:
@@ -18,19 +18,28 @@ that:
 
 Requirements (ensure these are installed in your environment):
 - openai-whisper
-- transformers
+- requests
+- python-dotenv (optional, for loading GEMINI_API_KEY from .env)
 - torch
 - ffmpeg (system dependency, needed by Whisper/ffmpeg-python internally)
 
 Notes:
 - This script does NOT depend on FastAPI or any web server code.
-- It uses environment-agnostic defaults and does not read a .env file.
+- It will attempt to read GEMINI_API_KEY from the environment or a .env file (if python-dotenv is installed).
 """
 
 import os
 import math
 import argparse
 from typing import List, Tuple, Dict, Optional
+
+# Try to load environment variables from .env for local development convenience.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    # dotenv is optional; if not available, environment must provide variables.
+    pass
 
 # Import Whisper
 try:
@@ -41,12 +50,12 @@ except Exception as exc:
         "and ensure ffmpeg is installed on your system."
     ) from exc
 
-# Import Transformers for translation
+# requests is used to call the Gemini API HTTP endpoint
 try:
-    from transformers import MarianMTModel, MarianTokenizer, pipeline
+    import requests
 except Exception as exc:
     raise RuntimeError(
-        "Failed to import 'transformers'. Please install with 'pip install transformers torch'."
+        "Failed to import 'requests'. Please install with 'pip install requests'."
     ) from exc
 
 
@@ -57,8 +66,7 @@ except Exception as exc:
 def _normalize_lang_code(lang: str) -> str:
     """
     Normalize language code to lowercase ISO-like code (best-effort).
-    Whisper returns two-letter codes (e.g., 'en', 'fr'), while opus-mt models
-    often use ISO 639-1 and 639-2 codes. We'll keep it lowercase for comparisons.
+    Whisper returns two-letter codes (e.g., 'en', 'fr').
     """
     return (lang or "").strip().lower()
 
@@ -125,81 +133,13 @@ def _format_segments_as_vtt(segments: List[Dict]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _select_marian_model_name(src_lang: str, tgt_lang: str) -> Optional[str]:
+def _determine_output_path(video_path: str, fmt: str) -> str:
     """
-    Pick a reasonable Helsinki-NLP/opus-mt model name given source and target languages.
-    Returns None if cannot determine a direct mapping.
-    This is a heuristic mapping for common languages.
+    Determine output subtitle path based on input video path and desired format.
+    e.g., /folder/video.mp4 + srt -> /folder/video.srt
     """
-    # Common direct pairs; expand as needed.
-    pairs = {
-        ("en", "de"): "Helsinki-NLP/opus-mt-en-de",
-        ("en", "fr"): "Helsinki-NLP/opus-mt-en-fr",
-        ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
-        ("en", "it"): "Helsinki-NLP/opus-mt-en-it",
-        ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
-        ("en", "ru"): "Helsinki-NLP/opus-mt-en-ru",
-        ("en", "zh"): "Helsinki-NLP/opus-mt-en-zh",
-        ("de", "en"): "Helsinki-NLP/opus-mt-de-en",
-        ("fr", "en"): "Helsinki-NLP/opus-mt-fr-en",
-        ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
-        ("it", "en"): "Helsinki-NLP/opus-mt-it-en",
-        ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
-        ("ru", "en"): "Helsinki-NLP/opus-mt-ru-en",
-        ("zh", "en"): "Helsinki-NLP/opus-mt-zh-en",
-        # Some pairs might not exist directly; user may see a model download error if unavailable.
-    }
-    return pairs.get((src_lang, tgt_lang))
-
-
-def _get_translation_pipeline(src_lang: str, tgt_lang: str):
-    """
-    Create a translation pipeline for the given source and target language using MarianMT.
-    Attempts a direct pair model first; if not available, tries a generic 'opus-mt-{src}-{tgt}'.
-    """
-    model_name = _select_marian_model_name(src_lang, tgt_lang)
-    # Fallback to the generic naming scheme if direct mapping not found.
-    if model_name is None:
-        model_name = f"Helsinki-NLP/opus-mt-{src_lang}-{tgt_lang}"
-    # Load tokenizer and model
-    tokenizer = MarianTokenizer.from_pretrained(model_name)
-    model = MarianMTModel.from_pretrained(model_name)
-    return pipeline("translation", model=model, tokenizer=tokenizer)
-
-
-def _translate_segments(segments: List[Dict], src_lang: str, tgt_lang: str) -> List[Dict]:
-    """
-    Translate each segment's text from src_lang to tgt_lang using MarianMT.
-    Returns new list of segments with 'text' replaced by translated text.
-    """
-    if not segments:
-        return segments
-
-    translator = _get_translation_pipeline(src_lang, tgt_lang)
-    # Batch process texts for efficiency; pipeline supports list input.
-    texts = [(seg.get("text") or "").strip() for seg in segments]
-    # Handle empty strings gracefully to maintain alignment
-    non_empty_indices = [i for i, t in enumerate(texts) if t]
-    non_empty_texts = [texts[i] for i in non_empty_indices]
-
-    translated_texts_map = {}
-    if non_empty_texts:
-        results = translator(non_empty_texts, max_length=1000)
-        # results is a list of dicts with 'translation_text'
-        for idx, res in zip(non_empty_indices, results):
-            translated_texts_map[idx] = res.get("translation_text", "")
-
-    translated_segments = []
-    for i, seg in enumerate(segments):
-        new_seg = dict(seg)
-        if i in translated_texts_map:
-            new_seg["text"] = translated_texts_map[i]
-        else:
-            # keep as-is (empty or untranslatable)
-            new_seg["text"] = (seg.get("text") or "").strip()
-        translated_segments.append(new_seg)
-
-    return translated_segments
+    base, _ext = os.path.splitext(video_path)
+    return f"{base}.{fmt}"
 
 
 def _ensure_supported_format(fmt: str) -> str:
@@ -212,15 +152,6 @@ def _ensure_supported_format(fmt: str) -> str:
     return fmt_norm
 
 
-def _determine_output_path(video_path: str, fmt: str) -> str:
-    """
-    Determine output subtitle path based on input video path and desired format.
-    e.g., /folder/video.mp4 + srt -> /folder/video.srt
-    """
-    base, _ext = os.path.splitext(video_path)
-    return f"{base}.{fmt}"
-
-
 def _transcribe_with_whisper(video_path: str, model_size: str = "small") -> Tuple[List[Dict], str]:
     """
     Run Whisper transcription and return segments and detected language code.
@@ -230,9 +161,7 @@ def _transcribe_with_whisper(video_path: str, model_size: str = "small") -> Tupl
     """
     model = whisper.load_model(model_size)
     result = model.transcribe(video_path, verbose=False)
-    # result keys include 'text', 'segments', 'language' (ISO-639-1 like)
     detected_lang = _normalize_lang_code(result.get("language", ""))
-    # Ensure segments have numeric id, start, end, text
     segments = []
     for s in result.get("segments", []):
         segments.append({
@@ -244,10 +173,138 @@ def _transcribe_with_whisper(video_path: str, model_size: str = "small") -> Tupl
     return segments, detected_lang
 
 
+def _get_gemini_api_key() -> Optional[str]:
+    """
+    Retrieve the Gemini API key from the environment.
+    The variable name is GEMINI_API_KEY.
+    """
+    return os.getenv("GEMINI_API_KEY", "").strip() or None
+
+
+def _gemini_translate_texts(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+    """
+    Translate a list of texts using Google Gemini API via the Generative Language API.
+    This implementation uses the 'text' generation endpoint with a clear instruction
+    to translate from source_lang to target_lang, preserving meaning and style.
+
+    Environment:
+    - Requires GEMINI_API_KEY to be set in the environment or available via .env.
+
+    Raises:
+    - RuntimeError with helpful messages if API key is missing or if the API call fails.
+    """
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Please set it in your environment or in a .env file. "
+            "Example .env entry:\nGEMINI_API_KEY=your_api_key_here"
+        )
+
+    # Choose a widely available text model; adjust if your environment standardizes differently.
+    model = "gemini-1.5-flash"
+
+    # Endpoint for text generation. We instruct the model to translate.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    headers = {"Content-Type": "application/json"}
+
+    translated: List[str] = []
+    for text in texts:
+        if not text:
+            translated.append("")
+            continue
+
+        prompt = (
+            f"Translate the following text from {source_lang} to {target_lang}. "
+            "Return only the translated text without additional commentary.\n\n"
+            f"Text:\n{text}"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.9,
+                "topK": 40,
+                "maxOutputTokens": 2048
+            }
+        }
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        except requests.RequestException as req_exc:
+            raise RuntimeError(
+                "Failed to reach Gemini API. Check your network connection and try again."
+            ) from req_exc
+
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Gemini API error (HTTP {resp.status_code}). Response: {resp.text}\n"
+                "Please verify that your GEMINI_API_KEY is valid, that the model name is available to your key, "
+                "and that your billing/quota allow requests."
+            )
+
+        data = {}
+        try:
+            data = resp.json()
+        except Exception as json_exc:
+            raise RuntimeError("Failed to parse Gemini API response as JSON.") from json_exc
+
+        try:
+            # Response shape: candidates[0].content.parts[0].text
+            candidates = data.get("candidates") or []
+            if not candidates:
+                raise KeyError("No candidates in response")
+            first = candidates[0]
+            content = first.get("content") or {}
+            parts = content.get("parts") or []
+            first_text = parts[0].get("text", "") if parts else ""
+            translated.append(first_text.strip())
+        except Exception as parse_exc:
+            raise RuntimeError(
+                f"Unexpected Gemini response format. Raw response: {data}"
+            ) from parse_exc
+
+    return translated
+
+
+def _translate_segments_with_gemini(segments: List[Dict], src_lang: str, tgt_lang: str) -> List[Dict]:
+    """
+    Translate each segment's text from src_lang to tgt_lang using Gemini API.
+    Returns a new list of segments with 'text' replaced by translated text.
+    """
+    if not segments:
+        return segments
+
+    texts = [(seg.get("text") or "").strip() for seg in segments]
+    # Preserve alignment of empty vs non-empty
+    non_empty_indices = [i for i, t in enumerate(texts) if t]
+    non_empty_texts = [texts[i] for i in non_empty_indices]
+
+    translated_map: Dict[int, str] = {}
+    if non_empty_texts:
+        translated_texts = _gemini_translate_texts(non_empty_texts, source_lang=src_lang, target_lang=tgt_lang)
+        for idx, t in zip(non_empty_indices, translated_texts):
+            translated_map[idx] = t
+
+    out_segments: List[Dict] = []
+    for i, seg in enumerate(segments):
+        new_seg = dict(seg)
+        if i in translated_map:
+            new_seg["text"] = translated_map[i]
+        else:
+            new_seg["text"] = (seg.get("text") or "").strip()
+        out_segments.append(new_seg)
+    return out_segments
+
+
 # PUBLIC_INTERFACE
 def subtitle_generation(video_path: str, subtitle_lang: str, subtitle_format: str) -> str:
     """
-    Generate subtitles for a video using Whisper and optional translation via Helsinki-NLP/opus-mt.
+    Generate subtitles for a video using Whisper and Google Gemini API for translation when needed.
 
     Parameters:
     - video_path: Path to the input video file.
@@ -259,8 +316,14 @@ def subtitle_generation(video_path: str, subtitle_lang: str, subtitle_format: st
 
     Behavior:
     - Transcribes the video with Whisper, auto-detecting the source language.
-    - If subtitle_lang differs from detected language, translates each segment using MarianMT.
+    - If subtitle_lang differs from detected language, translates each segment using Gemini API
+      (requires GEMINI_API_KEY to be set).
     - Formats the segments into the specified subtitle format and writes the file beside the video.
+
+    Environment:
+    - GEMINI_API_KEY must be set in the environment or provided via a .env file in development.
+      Example .env:
+        GEMINI_API_KEY=your_api_key_here
     """
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -276,11 +339,18 @@ def subtitle_generation(video_path: str, subtitle_lang: str, subtitle_format: st
     # Translate if needed
     if detected_lang and target_lang and detected_lang != target_lang:
         try:
-            segments = _translate_segments(segments, detected_lang, target_lang)
-        except Exception as exc:
+            segments = _translate_segments_with_gemini(segments, detected_lang, target_lang)
+        except RuntimeError as api_exc:
+            # Provide a helpful error message focused on missing key or API failure.
             raise RuntimeError(
-                f"Translation from '{detected_lang}' to '{target_lang}' failed. "
-                f"Ensure the appropriate Helsinki-NLP/opus-mt model exists."
+                f"Translation from '{detected_lang}' to '{target_lang}' failed via Gemini API. "
+                "Please ensure GEMINI_API_KEY is set (e.g., in a .env file) and that your key has access. "
+                f"Details: {api_exc}"
+            ) from api_exc
+        except Exception as exc:
+            # Unexpected exception path
+            raise RuntimeError(
+                f"An unexpected error occurred during translation: {exc}"
             ) from exc
 
     # Format output
@@ -297,7 +367,7 @@ def subtitle_generation(video_path: str, subtitle_lang: str, subtitle_format: st
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Generate subtitles from a video using Whisper and opus-mt.")
+    p = argparse.ArgumentParser(description="Generate subtitles from a video using Whisper and Gemini translation (if needed).")
     p.add_argument("--video", "-v", required=True, help="Path to the video file.")
     p.add_argument("--lang", "-l", required=True, help="Target language code (e.g., en, fr, es).")
     p.add_argument("--format", "-f", default="srt", choices=["srt", "vtt"], help="Subtitle format.")
@@ -310,7 +380,6 @@ def _cli_main():
     args = parser.parse_args()
 
     # Allow model override for CLI runs
-    # We re-use the public function; for model override, temporarily monkey-patch the transcribe function.
     global _transcribe_with_whisper
 
     original = _transcribe_with_whisper
@@ -321,9 +390,8 @@ def _cli_main():
     _transcribe_with_whisper = _transcribe_with_whisper_override
     try:
         out_path = subtitle_generation(args.video, args.lang, args.format)
-        print(f"Subtitle generated: {out_path}")
+        print("Subtitle generated:", out_path)
     finally:
-        # Restore original to avoid side effects if imported and used later in same process
         _transcribe_with_whisper = original
 
 
