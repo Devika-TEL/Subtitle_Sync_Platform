@@ -32,6 +32,10 @@ from typing import List, Dict, Any, Tuple, Optional
 import math
 import re
 
+# Backward compatibility alias to keep external imports stable if previously used
+SubtitleCue = Dict[str, Any]
+Transcript = Dict[str, Any]
+
 
 def _norm_text(t: str) -> str:
     """Normalize text for comparison: lowercase, single spaces, strip punctuation +- basic."""
@@ -179,7 +183,13 @@ def correct_subtitles(transcript: Dict[str, Any], subtitles: List[Dict[str, Any]
         A new list of cue dictionaries corrected to match transcript text and timing, preserving
         original format labels and metadata structure ('raw', multi-line structure) as feasible.
     """
-    segments = list(transcript.get("segments") or [])
+    # Validate minimal structure
+    if not isinstance(transcript, dict):
+        raise TypeError("transcript must be a dict with a 'segments' list")
+    if not isinstance(subtitles, list):
+        raise TypeError("subtitles must be a list of cue dicts")
+
+    segments = list((transcript.get("segments") or []))
     cues = list(subtitles or [])
 
     # Safety: if either is empty, return cues unmodified.
