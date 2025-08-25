@@ -190,7 +190,18 @@ def align_subtitles_to_transcript(
         item.pop("_orig_start", None)
         item.pop("_orig_end", None)
 
-    return aligned
+    # Conform output: only index, start, end, text, format
+    filtered = []
+    for idx, it in enumerate(aligned):
+        filtered.append({
+            "index": it.get("source_index", idx),
+            "start": float(it.get("start", 0.0)) if it.get("start") is not None else 0.0,
+            "end": float(it.get("end", max(0.0, float(it.get("start", 0.0))))) if it.get("end") is not None else float(it.get("start", 0.0) or 0.0),
+            "text": (it.get("text") or "").strip(),
+            "format": "generic",
+        })
+
+    return filtered
 
 
 # -----------------------

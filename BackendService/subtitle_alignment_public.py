@@ -177,7 +177,27 @@ def align_subtitles_to_transcript(
     # Final pass: ensure no overlaps and spacing, mild smoothing
     corrected = _post_smooth(corrected, intercue_gap=intercue_gap, min_duration=min_duration, max_duration=max_duration)
 
-    return corrected
+    # Conform output: only include allowed keys per requirements
+    allowed_keys = {"index", "start", "end", "text", "format"}
+    filtered: List[Dict[str, Any]] = []
+    for i, item in enumerate(corrected):
+        # derive format if present in original cue or default to 'srt' agnostic placeholder
+        fmt = item.get("format")
+        # Ensure index exists
+        out = {
+            "index": item.get("index", i),
+            "start": float(item.get("start", 0.0)),
+            "end": float(item.get("end", max(float(item.get("start", 0.0)), 0.0))),
+            "text": item.get("text", "") if isinstance(item.get("text", ""), str) else str(item.get("text", "")),
+            "format": fmt if isinstance(fmt, str) else None,
+        }
+        # Remove None format if not provided to strictly keep keys but allow None? Keep key with default 'generic'
+        if out["format"] is None:
+            out["format"] = "generic"
+        # Append filtered dict
+        filtered.append({k: out[k] for k in ["index", "start", "end", "text", "format"]})
+
+    return filtered
 
 
 # -------------------------- Internal helpers -------------------------- #
