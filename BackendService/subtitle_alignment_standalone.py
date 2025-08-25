@@ -67,7 +67,7 @@ Algorithm overview:
 
 Configuration (optional dict):
 - max_shift_seconds: float or None. If set, limit how far we move a cue from its original time.
-- similarity_threshold: float in [0,1]. Minimum similarity to accept direct time from transcript.
+- similarity_threshold: float in [0,1]. Minimum similarity to accept direct time from transcript (default 0.35).
 - time_weight: float. Weight for time proximity in composite scoring (default 0.35).
 - text_weight: float. Weight for text similarity in composite scoring (default 0.65).
 - search_window_seconds: float. How far (± seconds) around cue time to search in transcript (default 6.0).
@@ -75,6 +75,9 @@ Configuration (optional dict):
 - max_duration: float. Maximum enforced cue duration in seconds (default 8.0).
 - avg_duration_hint: float or None. If provided, used during interpolation (default None).
 - punctuation_sensitive: bool. If False, punctuation is stripped before similarity (default False).
+Behavioral notes:
+- If similarity is slightly below threshold but overall composite score is strong, we still align to transcript times.
+- Empty or missing texts are filled from the matched transcript when similarity is high.
 
 Notes:
 - This utility aims to be robust for common alignment tasks. For production use,
@@ -159,7 +162,10 @@ def align_subtitles_to_transcript(
         # Decide final times
         orig_start, orig_end = cue.get("start"), cue.get("end")
 
-        if best_idx is not None and best_sim >= cfg["similarity_threshold"]:
+        accept_by_similarity = (best_idx is not None and best_sim >= cfg["similarity_threshold"])
+        # Also accept when composite score is strong even if sim barely below threshold
+        accept_by_score = (best_idx is not None and best_score >= 0.55 and best_sim >= (cfg["similarity_threshold"] * 0.8))
+        if accept_by_similarity or accept_by_score:
             t_seg = t_segments[best_idx]
             new_start, new_end = t_seg["start"], t_seg["end"]
             # Respect max shift if configured and original time exists
@@ -168,8 +174,23 @@ def align_subtitles_to_transcript(
                     orig_start, orig_end, new_start, new_end, cfg["max_shift_seconds"]
                 )
         else:
-            # Keep original if present; interpolation to be done later for missing times
-            new_start, new_end = orig_start, orig_end
+            # If original exists but is clearly far from transcript window for best candidate, gently shift midpoint toward transcript
+            if best_idx is not None and orig_start is not None and orig_end is not None:
+                t_seg = t_segments[best_idx]
+                t_mid = 0.5 * (t_seg["start"] + t_seg["end"])
+                s_mid = 0.5 * (orig_start + orig_end)
+                # Nudge up to 40% toward target if far away
+                alpha = 0.4
+                desired_mid = s_mid + alpha * (t_mid - s_mid)
+                dur = max(0.5, orig_end - orig_start)
+                new_start = desired_mid - 0.5 * dur
+                new_end = desired_mid + 0.5 * dur
+                # clamp shift if configured
+                if cfg["max_shift_seconds"] is not None:
+                    new_start, new_end = _limit_shift(orig_start, orig_end, new_start, new_end, cfg["max_shift_seconds"])
+            else:
+                # Keep original if present; interpolation to be done later for missing times
+                new_start, new_end = orig_start, orig_end
 
         aligned.append({
             "start": new_start,
@@ -184,6 +205,12 @@ def align_subtitles_to_transcript(
 
     # Interpolate any missing or invalid times
     aligned = _interpolate_and_enforce(aligned, cfg)
+
+    # If some items have empty text but a strong transcript match, fill from transcript
+    for item in aligned:
+        if (not item.get("text")) and item.get("matched_transcript_index") is not None and item.get("similarity", 0.0) >= max(0.5, cfg["similarity_threshold"]):
+            t_seg = t_segments[item["matched_transcript_index"]]
+            item["text"] = t_seg.get("text", "").strip()
 
     # Remove helper fields
     for item in aligned:
@@ -308,7 +335,7 @@ def _lcs_ratio(a: str, b: str) -> float:
     return (2.0 * lcs_len) / (n + m)
 
 
-def _hybrid_text_similarity(cue: Dict, seg: Dict]) -> float:
+def _hybrid_text_similarity(cue: Dict, seg: Dict) -> float:
     # Aggregate multiple similarity measures
     j = _jaccard(cue["tokens"], seg["tokens"])
     c = _cosine_like(cue["tf"], seg["tf"])
