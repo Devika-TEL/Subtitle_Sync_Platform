@@ -130,6 +130,12 @@ def align_subtitles_to_transcript(
     if config:
         cfg.update({k: v for k, v in config.items() if v is not None})
 
+    # Additional thresholds modeled after the public API behavior
+    min_similarity_for_text_correction = max(0.5, cfg["similarity_threshold"])
+    min_similarity_for_time_trust = max(0.35, cfg["similarity_threshold"] * 0.9)
+    max_time_gap = cfg.get("search_window_seconds", 6.0) / 2.0  # approximate window for "nearby" trust
+    intercue_gap = 0.06  # 60ms to avoid overlaps
+
     # Preprocess and validate inputs
     t_segments = _normalize_segments(transcript, require_time=True, pun_sensitive=cfg["punctuation_sensitive"])
     s_cues = _normalize_segments(subtitles, require_time=False, pun_sensitive=cfg["punctuation_sensitive"])
@@ -144,7 +150,6 @@ def align_subtitles_to_transcript(
 
     # Build search index by time (sorted transcript)
     t_sorted = sorted(enumerate(t_segments), key=lambda x: x[1]["start"])
-    t_index = [i for i, _ in t_sorted]
     t_times = [seg["start"] for _, seg in t_sorted]
 
     aligned = []
@@ -159,65 +164,112 @@ def align_subtitles_to_transcript(
             window=cfg["search_window_seconds"]
         )
 
-        # Decide final times
         orig_start, orig_end = cue.get("start"), cue.get("end")
+        cue_mid = None
+        if orig_start is not None and orig_end is not None:
+            cue_mid = 0.5 * (orig_start + orig_end)
+        elif orig_start is not None:
+            cue_mid = orig_start
+        elif orig_end is not None:
+            cue_mid = orig_end
 
-        accept_by_similarity = (best_idx is not None and best_sim >= cfg["similarity_threshold"])
-        # Also accept when composite score is strong even if sim barely below threshold
-        accept_by_score = (best_idx is not None and best_score >= 0.55 and best_sim >= (cfg["similarity_threshold"] * 0.8))
-        if accept_by_similarity or accept_by_score:
-            t_seg = t_segments[best_idx]
-            new_start, new_end = t_seg["start"], t_seg["end"]
-            # Respect max shift if configured and original time exists
-            if cfg["max_shift_seconds"] is not None and orig_start is not None:
-                new_start, new_end = _limit_shift(
-                    orig_start, orig_end, new_start, new_end, cfg["max_shift_seconds"]
-                )
-        else:
-            # If original exists but is clearly far from transcript window for best candidate, gently shift midpoint toward transcript
-            if best_idx is not None and orig_start is not None and orig_end is not None:
-                t_seg = t_segments[best_idx]
-                t_mid = 0.5 * (t_seg["start"] + t_seg["end"])
-                s_mid = 0.5 * (orig_start + orig_end)
-                # Nudge up to 40% toward target if far away
-                alpha = 0.4
-                desired_mid = s_mid + alpha * (t_mid - s_mid)
-                dur = max(0.5, orig_end - orig_start)
-                new_start = desired_mid - 0.5 * dur
-                new_end = desired_mid + 0.5 * dur
-                # clamp shift if configured
-                if cfg["max_shift_seconds"] is not None:
-                    new_start, new_end = _limit_shift(orig_start, orig_end, new_start, new_end, cfg["max_shift_seconds"])
+        new_start, new_end = orig_start, orig_end
+        chosen_idx = best_idx
+
+        # Decide alignment and time correction logic
+        if chosen_idx is not None:
+            t_seg = t_segments[chosen_idx]
+            t_start, t_end = t_seg["start"], t_seg["end"]
+            t_mid = 0.5 * (t_start + t_end)
+            # If text similarity is strong, fit to transcript window using reading constraints
+            if best_sim >= min_similarity_for_text_correction:
+                # Estimate desired duration from text and clamp within min/max
+                desired = _estimate_duration_for_text((cue.get("text") or t_seg.get("text", "")),
+                                                      min_duration=cfg["min_duration"],
+                                                      max_duration=cfg["max_duration"],
+                                                      max_cps=25.0)
+                # Fit centered inside transcript window if possible
+                tw = max(t_end - t_start, 0.0)
+                if desired <= tw:
+                    new_start = t_start + 0.5 * (tw - desired)
+                    new_end = new_start + desired
+                else:
+                    # Expand around transcript window modestly
+                    overflow = desired - tw
+                    new_start = t_start - 0.5 * overflow
+                    new_end = t_end + 0.5 * overflow
             else:
-                # Keep original if present; interpolation to be done later for missing times
-                new_start, new_end = orig_start, orig_end
+                # If time is far from transcript, nudge towards transcript midpoint
+                if cue_mid is not None:
+                    delta = t_mid - cue_mid
+                    # Nudge stronger if score is good; otherwise small nudge
+                    alpha = 0.5 if best_score >= 0.55 else 0.3
+                    desired_mid = cue_mid + alpha * delta
+                    # Preserve original duration if exists; otherwise use transcript duration
+                    dur = None
+                    if orig_start is not None and orig_end is not None and orig_end > orig_start:
+                        dur = max(cfg["min_duration"], min(cfg["max_duration"], orig_end - orig_start))
+                    else:
+                        dur = max(cfg["min_duration"], min(cfg["max_duration"], t_end - t_start))
+                    new_start = desired_mid - 0.5 * dur
+                    new_end = desired_mid + 0.5 * dur
+                else:
+                    # Missing time; adopt transcript window directly
+                    new_start, new_end = t_start, t_end
 
+            # Respect max shift if configured and original time exists
+            if cfg["max_shift_seconds"] is not None and orig_start is not None and new_start is not None:
+                new_start, new_end = _limit_shift(orig_start, orig_end, new_start, new_end, cfg["max_shift_seconds"])
+        else:
+            # No reliable match:
+            # If original exists keep for now, otherwise we will interpolate later
+            new_start, new_end = orig_start, orig_end
+
+        # Enforce immediate duration bounds if we have concrete times
+        if new_start is not None and new_end is not None:
+            if new_end < new_start:
+                new_end = new_start + cfg["min_duration"]
+            dur = new_end - new_start
+            if dur < cfg["min_duration"]:
+                new_end = new_start + cfg["min_duration"]
+            elif dur > cfg["max_duration"]:
+                new_end = new_start + cfg["max_duration"]
+
+        # Prepare item with potential text correction later
         aligned.append({
             "start": new_start,
             "end": new_end,
             "text": cue["text"],
             "source_index": s_idx,
-            "matched_transcript_index": best_idx,
-            "similarity": float(best_sim if best_idx is not None else 0.0),
+            "matched_transcript_index": chosen_idx,
+            "similarity": float(best_sim if chosen_idx is not None else 0.0),
             "_orig_start": orig_start,
             "_orig_end": orig_end,
         })
 
-    # Interpolate any missing or invalid times
+    # Interpolate any missing or invalid times and enforce monotonicity
     aligned = _interpolate_and_enforce(aligned, cfg)
 
-    # If some items have empty text but a strong transcript match, fill from transcript
+    # Fill/replace texts from transcript when confidence supports it
     for item in aligned:
-        if (not item.get("text")) and item.get("matched_transcript_index") is not None and item.get("similarity", 0.0) >= max(0.5, cfg["similarity_threshold"]):
-            t_seg = t_segments[item["matched_transcript_index"]]
-            item["text"] = t_seg.get("text", "").strip()
+        mi = item.get("matched_transcript_index")
+        if mi is None:
+            continue
+        t_seg = t_segments[mi]
+        # If empty or clearly divergent text and similarity is strong, replace with transcript text
+        if (not item.get("text")) or item.get("similarity", 0.0) >= max(0.6, min_similarity_for_text_correction):
+            new_text = t_seg.get("text", "").strip()
+            item["text"] = new_text if new_text else (item.get("text") or "")
+
+    # Final smoothing: ensure no overlaps and clamp durations
+    aligned = _final_smooth(aligned, intercue_gap=intercue_gap, min_duration=cfg["min_duration"], max_duration=cfg["max_duration"])
 
     # Remove helper fields
     for item in aligned:
         item.pop("_orig_start", None)
         item.pop("_orig_end", None)
 
-    # Conform output: only index, start, end, text, format
+    # Conform output
     filtered = []
     for idx, it in enumerate(aligned):
         filtered.append({
@@ -435,6 +487,25 @@ def _limit_shift(orig_start: Optional[float], orig_end: Optional[float],
     return clamped_start, clamped_start + duration
 
 
+def _estimate_duration_for_text(
+    text: str,
+    *,
+    min_duration: float,
+    max_duration: float,
+    max_cps: float = 25.0,
+) -> float:
+    """
+    Estimate optimal duration for given text based on characters per second,
+    clamped to [min_duration, max_duration].
+    """
+    txt = (text or "").replace("\n", " ").strip()
+    n_chars = len(txt)
+    if n_chars <= 0:
+        return min_duration
+    est = max(n_chars / max_cps, min_duration)
+    return min(est, max_duration)
+
+
 def _interpolate_and_enforce(aligned: List[Dict], cfg: Dict) -> List[Dict]:
     n = len(aligned)
     # Compute a reasonable average duration
@@ -494,6 +565,46 @@ def _interpolate_and_enforce(aligned: List[Dict], cfg: Dict) -> List[Dict]:
     return aligned
 
 
+def _final_smooth(
+    cues: List[Dict],
+    *,
+    intercue_gap: float,
+    min_duration: float,
+    max_duration: float,
+) -> List[Dict]:
+    """
+    Final pass to ensure:
+    - No overlaps (respecting intercue_gap)
+    - Duration constraints
+    - Monotonic timing
+    """
+    if not cues:
+        return cues
+    out = []
+    last_end = None
+    for cue in cues:
+        if cue.get("start") is None or cue.get("end") is None:
+            # Skip pathological entries
+            continue
+        start = float(cue["start"])
+        end = float(cue["end"])
+        if last_end is not None and start < last_end + intercue_gap:
+            shift = (last_end + intercue_gap) - start
+            start += shift
+            end += shift
+        dur = end - start
+        if dur < min_duration:
+            end = start + min_duration
+        elif dur > max_duration:
+            end = start + max_duration
+        new_cue = dict(cue)
+        new_cue["start"] = start
+        new_cue["end"] = end
+        out.append(new_cue)
+        last_end = end
+    return out
+
+
 # -----------------------
 # Example / CLI
 # -----------------------
@@ -529,11 +640,19 @@ def main():
         "punctuation_sensitive": False,
     }
 
+    print("Original Subtitles:")
+    for i, s in enumerate(subtitles, 1):
+        os = s.get("start")
+        oe = s.get("end")
+        print(f"{i:02d} | {os if os is not None else 'None'} --> {oe if oe is not None else 'None'} | text={s.get('text','')}")
+
     aligned = align_subtitles_to_transcript(transcript, subtitles, config)
 
-    print("Aligned Subtitles:")
+    print("\nAligned Subtitles:")
     for i, a in enumerate(aligned, 1):
-        print(f"{i:02d} | {a['start']:.2f} --> {a['end']:.2f} | sim={a['similarity']:.2f} | text={a['text']}")
+        sim = a.get("similarity", None)
+        sim_str = f"{sim:.2f}" if isinstance(sim, (int, float)) else "n/a"
+        print(f"{i:02d} | {a['start']:.2f} --> {a['end']:.2f} | sim={sim_str} | text={a['text']}")
 
 
 # Entry point
