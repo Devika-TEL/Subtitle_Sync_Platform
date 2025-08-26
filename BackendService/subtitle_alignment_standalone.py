@@ -93,6 +93,8 @@ def align_subtitles_to_transcript(
     intercue_gap = 0.06  # 60ms to avoid overlaps
 
     # Normalize
+    # Accept robust input: if users pass transcript/cues as strings or partially-formed dicts,
+    # coerce them into dicts with at least text="" to avoid AttributeError on .get
     t_segments = _normalize_segments(transcript, require_time=True, pun_sensitive=cfg["punctuation_sensitive"])
     s_cues = _normalize_segments(subtitles, require_time=False, pun_sensitive=cfg["punctuation_sensitive"])
 
@@ -267,10 +269,74 @@ def _mid_from_times(start: Optional[float], end: Optional[float]) -> Optional[fl
 
 _WORD_RE = re.compile(r"[A-Za-z0-9']+")
 
+def _as_segment_dict(item, require_time: bool) -> Dict:
+    """
+    Coerce various input types into a standard segment/cue dict to avoid AttributeError.
+    - If item is a dict: return a shallow copy normalized later.
+    - If item is a string: treat as text only; times may be None (or 0 if require_time to enable processing).
+    - Otherwise: convert to string for text.
+    """
+    if isinstance(item, dict):
+        return dict(item)
+    # Strings or other primitives: treat content as text
+    text = str(item) if item is not None else ""
+    base = {"text": text}
+    if require_time:
+        base.setdefault("start", 0.0)
+        base.setdefault("end", 0.0)
+    else:
+        base.setdefault("start", None)
+        base.setdefault("end", None)
+    return base
+
+def _normalize_segments(items, require_time: bool, pun_sensitive: bool) -> List[Dict]:
+    """
+    Normalize a list of transcript segments or subtitle cues.
+    Ensures each element is a dict with keys: text (str), start (float|None), end (float|None).
+    Accepts strings or malformed entries and coerces them, preventing .get on non-dicts.
+    """
+    if items is None:
+        return []
+    # If a single string accidentally passed, wrap into a list
+    if isinstance(items, str):
+        items = [items]
+    result: List[Dict] = []
+    for raw in items:
+        item = _as_segment_dict(raw, require_time=require_time)
+        # Extract text
+        text = item.get("text", "")
+        if not isinstance(text, str):
+            text = str(text) if text is not None else ""
+        # Times
+        start = item.get("start", None)
+        end = item.get("end", None)
+        # Coerce numeric if present
+        try:
+            start = float(start) if start is not None else (0.0 if require_time else None)
+        except Exception:
+            start = 0.0 if require_time else None
+        try:
+            end = float(end) if end is not None else (start if require_time else None)
+        except Exception:
+            end = (start if require_time else None)
+        # Ensure ordering if both present
+        if start is not None and end is not None and end < start:
+            start, end = end, start
+        result.append({
+            "text": text or "",
+            "start": start,
+            "end": end
+        })
+    # Sort if we have numeric starts available
+    result.sort(key=lambda d: (float(d["start"]) if d["start"] is not None else float("inf"),
+                               float(d["end"]) if d["end"] is not None else float("inf")))
+    return result
+
 def _strip_punctuation(s: str) -> str:
     return re.sub(r"[^\w\s']", " ", s)
 
 def _tokenize(s: str) -> List[str]:
+    s = s if isinstance(s, str) else str(s or "")
     return [m.group(0).lower() for m in _WORD_RE.finditer(s.lower())]
 
 def _term_freq(tokens: List[str]) -> Dict[str, float]:

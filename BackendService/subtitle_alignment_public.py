@@ -203,35 +203,58 @@ def align_subtitles_to_transcript(
 # -------------------------- Internal helpers -------------------------- #
 
 def _normalize_transcript(transcript: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Ensure transcript segments are sorted, valid, and normalized."""
-    segs = []
+    """Ensure transcript segments are sorted, valid, and normalized.
+    Accepts dict or string elements."""
+    segs: List[Dict[str, Any]] = []
+    if transcript is None:
+        return segs
     for seg in transcript:
         if seg is None:
             continue
-        start = float(seg.get("start", 0.0))
-        end = float(seg.get("end", start))
-        text = _extract_text(seg)
+        if isinstance(seg, dict):
+            start = float(seg.get("start", 0.0))
+            end = float(seg.get("end", start))
+            text = _extract_text(seg)
+            base = dict(seg)
+        else:
+            # Coerce string or primitive to dict
+            text = str(seg)
+            start = 0.0
+            end = 0.0
+            base = {}
         if end < start:
             start, end = end, start  # swap if out of order
         if not text:
             text = ""
-        segs.append({**seg, "start": start, "end": end, "text": text})
+        base.update({"start": start, "end": end, "text": text})
+        segs.append(base)
     segs.sort(key=lambda s: (s["start"], s["end"]))
     return segs
 
 
 def _normalize_cues(cues: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Ensure cues are sorted, valid, and normalized to have 'text'."""
-    out = []
+    """Ensure cues are sorted, valid, and normalized to have 'text'.
+    Accepts dict or string elements."""
+    out: List[Dict[str, Any]] = []
+    if cues is None:
+        return out
     for c in cues:
         if c is None:
             continue
-        start = float(c.get("start", 0.0))
-        end = float(c.get("end", start))
-        text = _extract_text(c)
+        if isinstance(c, dict):
+            start = float(c.get("start", 0.0))
+            end = float(c.get("end", start))
+            text = _extract_text(c)
+            base = dict(c)
+        else:
+            text = str(c)
+            start = 0.0
+            end = 0.0
+            base = {}
         if end < start:
             start, end = end, start
-        out.append({**c, "start": start, "end": end, "text": text})
+        base.update({"start": start, "end": end, "text": text})
+        out.append(base)
     out.sort(key=lambda x: (x["start"], x["end"]))
     return out
 

@@ -96,13 +96,28 @@ def _safe_float(v, default=0.0) -> float:
         return default
 
 def _sort_by_start(items: List[Dict]) -> List[Dict]:
-    return sorted(items, key=lambda x: _safe_float(x.get("start", 0.0)))
+    # Be defensive: if items may include non-dicts (e.g., strings), coerce to dicts with text only
+    normed: List[Dict] = []
+    for it in items:
+        if isinstance(it, dict):
+            normed.append(it)
+        else:
+            normed.append({"text": str(it) if it is not None else "", "start": 0.0, "end": 0.0})
+    return sorted(normed, key=lambda x: _safe_float(x.get("start", 0.0)))
 
 def _duration(item: Dict) -> float:
     return max(0.0, _safe_float(item.get("end", 0.0)) - _safe_float(item.get("start", 0.0)))
 
 def _merge_texts(items: List[Dict]) -> str:
-    return " ".join([str(it.get("text", "")).strip() for it in items if str(it.get("text", "")).strip()])
+    texts: List[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            t = str(it.get("text", "")).strip()
+        else:
+            t = str(it).strip()
+        if t:
+            texts.append(t)
+    return " ".join(texts)
 
 def _span_time(items: List[Dict]) -> Tuple[float, float]:
     if not items:
@@ -253,14 +268,31 @@ def align_subtitles_to_transcript(
     if not isinstance(transcript, list) or not isinstance(subtitles, list):
         raise TypeError("transcript and subtitles must be lists of dicts")
 
-    t_segments = _sort_by_start([
-        {"text": str(seg.get("text", "")), "start": _safe_float(seg.get("start", 0.0)), "end": _safe_float(seg.get("end", 0.0))}
-        for seg in transcript
-        if seg is not None
-    ])
-    s_cues = _sort_by_start([
-        dict(c) for c in subtitles if c is not None
-    ])
+    # Coerce items to dicts if strings are present to avoid .get on str
+    t_coerced = []
+    for seg in transcript:
+        if seg is None:
+            continue
+        if isinstance(seg, dict):
+            text = str(seg.get("text", ""))
+            start = _safe_float(seg.get("start", 0.0))
+            end = _safe_float(seg.get("end", 0.0))
+        else:
+            text = str(seg)
+            start = 0.0
+            end = 0.0
+        t_coerced.append({"text": text, "start": start, "end": end})
+    t_segments = _sort_by_start(t_coerced)
+
+    s_coerced = []
+    for c in subtitles:
+        if c is None:
+            continue
+        if isinstance(c, dict):
+            s_coerced.append(dict(c))
+        else:
+            s_coerced.append({"text": str(c), "start": 0.0, "end": 0.0})
+    s_cues = _sort_by_start(s_coerced)
 
     if not t_segments or not s_cues:
         # Nothing to align
