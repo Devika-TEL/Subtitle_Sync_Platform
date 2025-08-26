@@ -12,17 +12,22 @@ cues to a given reference transcript with timestamps. The alignment uses a light
 This is intended for direct use from scripts or REPL sessions. It does not depend on any
 web framework or external libraries.
 
-Data contracts:
-- transcript: List[dict] with required keys:
-    - "text": str
-    - "start": float (seconds)
-    - "end": float (seconds)
-- subtitles: List[dict] with required keys:
-    - "text": str
-    - "start": float (seconds)
-    - "end": float (seconds)
+Data contracts (updated):
+- transcript: Whisper transcribe() output or a flat list:
+    - If dict: expects a "segments" list. Each segment should include:
+        - "text": str
+        - "start": float (seconds)
+        - "end": float (seconds)
+      We'll normalize into a List[dict] of segments.
+    - If list: same segment structure as above. Non-dict items are coerced to text-only with 0.0 times.
+- subtitles: List[dict] of cues with keys:
+    - "index": int (sequence; auto-filled if missing)
+    - "start": float (seconds; default 0.0)
+    - "end": float (seconds; default 0.0; fixed to be >= start)
+    - "text": str (default "")
+    - "format": str (consistent across outputs; inferred from first non-empty input format or "")
 
-Both lists should be ordered in time (start ascending). If not, we sort them.
+Both lists are sorted by start time internally if not already ordered.
 
 Example
 -------
@@ -63,7 +68,7 @@ is a trustworthy reference.
 
 """
 
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Union
 import re
 
 _PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
@@ -210,7 +215,7 @@ def _distribute_time_within_span(
 
 # PUBLIC_INTERFACE
 def align_subtitles_to_transcript(
-    transcript: List[Dict],
+    transcript: Union[List[Dict], Dict[str, Any]],
     subtitles: List[Dict],
     *,
     max_span: int = 5,
@@ -218,27 +223,47 @@ def align_subtitles_to_transcript(
     min_duration: float = 0.4,
     min_gap: float = 0.02,
 ) -> List[Dict]:
-    """Align subtitles' start/end timings to a reference transcript as much as possible.
+    """
+    Align subtitles' start/end timings to a reference transcript as much as possible.
 
-    This function is resilient to inputs that may contain strings instead of dicts by coercing
-    each element into a dictionary with at least the 'text' field and default start/end values.
+    Input normalization:
+    - transcript may be either:
+        1) Whisper-like dict with a "segments" list. Each segment should have "text", "start", "end".
+           We'll internally normalize to a flat list of dicts with keys: text/start/end.
+        2) A direct list of segments where each item is dict-like (or even a string). We'll coerce into dicts.
+    - subtitles must be a list of dicts with keys: index, start, end, text, and format. However, this
+      function robustly handles missing or malformed fields:
+        * Missing text -> "" (empty string)
+        * Missing start/end -> 0.0
+        * Missing index -> auto-sequence starting at 1
+        * Missing format -> a common format determined from the first non-empty 'format' among inputs; else ""
+      Extra fields are ignored in the output.
+
+    Behavior:
+    - Performs greedy, monotonic alignment based on token Jaccard similarity to assign better timings
+      from the transcript to each subtitle cue.
+    - Preserves and cleans output by returning a list of dicts with exactly:
+        ["index", "start", "end", "text", "format"]
+      with values validated and auto-filled.
+    - Enforces non-overlap, minimal gap, and minimal duration on final timings.
 
     Parameters
     ----------
-    transcript : List[Dict]
-        List of dicts with keys:
-        - text: str
-        - start: float (seconds)
-        - end: float (seconds)
-        May contain strings; they will be coerced to dicts.
-        Must be roughly chronological. Will be sorted by start.
+    transcript : Union[List[Dict], Dict[str, Any]]
+        Whisper transcribe() output (dict with 'segments': [...]) or a flat list of segment dicts.
+        Each segment is expected to include:
+          - text: str
+          - start: float (seconds)
+          - end: float (seconds)
+        Any missing values are defaulted during normalization.
     subtitles : List[Dict]
-        List of dicts with keys:
-        - text: str
-        - start: float (seconds)
-        - end: float (seconds)
-        May contain strings; they will be coerced to dicts.
-        Will be aligned to the transcript. Will be sorted by start.
+        List of subtitle dicts, each ideally with:
+          - index: int (sequence)
+          - start: float (seconds)
+          - end: float (seconds)
+          - text: str
+          - format: str (e.g., 'srt', 'vtt'). If mixed/missing, a common format is derived or set to "".
+        Missing/invalid values will be corrected as described above.
     max_span : int, optional
         Maximum number of transcript segments to consider as a contiguous match span for a single subtitle.
     min_similarity : float, optional
@@ -252,29 +277,23 @@ def align_subtitles_to_transcript(
     Returns
     -------
     List[Dict]
-        A new list of subtitle dicts with adjusted "start"/"end" timings.
-        The "text" and any extra fields from inputs are preserved where possible.
-
-    Examples
-    --------
-    >>> transcript = [
-    ...     {"text": "Good morning", "start": 0.0, "end": 1.0},
-    ...     {"text": "and welcome to the show", "start": 1.0, "end": 2.5},
-    ... ]
-    >>> subtitles = [
-    ...     {"text": "Good morning", "start": 0.4, "end": 1.4},
-    ...     {"text": "Welcome to the show", "start": 2.0, "end": 3.2},
-    ... ]
-    >>> aligned = align_subtitles_to_transcript(transcript, subtitles)
-    >>> round(aligned[0]["start"], 2), round(aligned[0]["end"], 2)
-    (0.0, 1.0)
+        Cleaned and aligned list of subtitle dicts, each with keys:
+        ["index", "start", "end", "text", "format"].
     """
-    if not isinstance(transcript, list) or not isinstance(subtitles, list):
-        raise TypeError("transcript and subtitles must be lists (elements may be dicts or strings)")
+    # ---- Normalize transcript ----
+    if isinstance(transcript, dict):
+        # Whisper output: expect a 'segments' key
+        segments_raw = transcript.get("segments") or []
+        if not isinstance(segments_raw, list):
+            segments_raw = []
+        transcript_list = segments_raw
+    elif isinstance(transcript, list):
+        transcript_list = transcript
+    else:
+        raise TypeError("transcript must be a Whisper-like dict with 'segments' or a list of segments")
 
-    # Coerce items to dicts if strings are present to avoid .get on str
-    t_coerced = []
-    for seg in transcript:
+    t_coerced: List[Dict[str, Any]] = []
+    for seg in transcript_list:
         if seg is None:
             continue
         if isinstance(seg, dict):
@@ -282,29 +301,66 @@ def align_subtitles_to_transcript(
             start = _safe_float(seg.get("start", 0.0))
             end = _safe_float(seg.get("end", 0.0))
         else:
+            # Coerce non-dict to a text-only segment
             text = str(seg)
             start = 0.0
             end = 0.0
         t_coerced.append({"text": text, "start": start, "end": end})
     t_segments = _sort_by_start(t_coerced)
 
-    s_coerced = []
-    for c in subtitles:
+    # ---- Normalize subtitles (fix malformed fields) ----
+    if not isinstance(subtitles, list):
+        raise TypeError("subtitles must be a list of dicts")
+    s_raw: List[Dict[str, Any]] = []
+    for idx, c in enumerate(subtitles, start=1):
         if c is None:
-            continue
-        if isinstance(c, dict):
-            s_coerced.append(dict(c))
-        else:
-            s_coerced.append({"text": str(c), "start": 0.0, "end": 0.0})
-    s_cues = _sort_by_start(s_coerced)
+            c = {}
+        if not isinstance(c, dict):
+            c = {"text": str(c)}
+        text = str(c.get("text", "")) if c.get("text") is not None else ""
+        start = _safe_float(c.get("start", 0.0))
+        end = _safe_float(c.get("end", 0.0))
+        index_val = c.get("index")
+        try:
+            index = int(index_val) if index_val is not None else idx
+        except Exception:
+            index = idx
+        fmt = c.get("format")
+        fmt = str(fmt).strip() if isinstance(fmt, str) else ""
+        s_raw.append({
+            "index": index,
+            "start": start,
+            "end": end,
+            "text": text,
+            "format": fmt,
+        })
+    # Determine common format: first non-empty wins
+    common_format = ""
+    for c in s_raw:
+        if c["format"]:
+            common_format = c["format"]
+            break
+    # Sort by start for alignment
+    s_cues = sorted(s_raw, key=lambda x: _safe_float(x.get("start", 0.0)))
 
+    # Nothing to align edge cases
     if not t_segments or not s_cues:
-        # Nothing to align
-        return s_cues
+        # Return cleaned list with ensured fields and consistent format/index
+        normalized: List[Dict] = []
+        for idx, item in enumerate(s_cues, start=1):
+            start_v = _safe_float(item.get("start", 0.0))
+            end_v = _safe_float(item.get("end", 0.0))
+            text_v = str(item.get("text", ""))
+            normalized.append({
+                "index": int(idx),
+                "start": float(start_v),
+                "end": float(end_v if end_v >= start_v else start_v),
+                "text": text_v,
+                "format": common_format,
+            })
+        return normalized
 
-    # Precompute transcript tokens
-    t_tokens = [_tokens(seg["text"]) for seg in t_segments]
-
+    # ---- Alignment ----
     aligned: List[Dict] = []
     t_idx = 0  # monotonic pointer into transcript
 
@@ -320,8 +376,8 @@ def align_subtitles_to_transcript(
             min_sim=min_similarity,
         )
 
-        # Prepare the new cue dict
-        new_cue = dict(cue)  # copy extra fields
+        # Prepare the new cue dict (copy cleaned fields)
+        new_cue = dict(cue)
 
         if score >= min_similarity:
             span = t_segments[i : j + 1]
@@ -362,28 +418,15 @@ def align_subtitles_to_transcript(
     # Final non-overlap enforcement and minimal gap/duration
     aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
 
-    # Normalize output: ensure each item has only keys: index, start, end, text, format.
-    # Per requirement: all outputs must use the same 'format' value, taken from the first
-    # non-empty 'format' present in the original subtitles list; default to '' if none.
-    # Determine common format from original inputs (s_cues preserves original order/fields).
-    common_format = ""
-    for orig in s_cues:
-        if isinstance(orig, dict):
-            fmt = orig.get("format")
-            # consider non-empty string values (ignore None or empty)
-            if isinstance(fmt, str) and fmt.strip():
-                common_format = fmt
-                break
-
+    # ---- Output cleaning: enforce required keys and consistent format ----
     normalized: List[Dict] = []
     for idx, item in enumerate(aligned, start=1):
-        # Extract with defaults
         start_v = _safe_float(item.get("start", 0.0))
         end_v = _safe_float(item.get("end", 0.0))
-        text_v = str(item.get("text", "") if isinstance(item, dict) else "")
+        text_v = str(item.get("text", ""))
 
         normalized.append({
-            "index": int(idx),
+            "index": int(idx),  # re-sequence to ensure valid index
             "start": float(start_v),
             "end": float(end_v),
             "text": text_v,
