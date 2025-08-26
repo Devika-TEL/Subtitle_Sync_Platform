@@ -361,7 +361,31 @@ def align_subtitles_to_transcript(
 
     # Final non-overlap enforcement and minimal gap/duration
     aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
-    return aligned
+
+    # Normalize output: ensure each item has only keys: index, start, end, text, format.
+    normalized: List[Dict] = []
+    for idx, item in enumerate(aligned, start=1):
+        # Extract with defaults
+        start_v = _safe_float(item.get("start", 0.0))
+        end_v = _safe_float(item.get("end", 0.0))
+        text_v = str(item.get("text", "") if isinstance(item, dict) else "")
+        fmt_v = ""
+        # Some upstream paths might provide a format field; coerce to string if present
+        if isinstance(item, dict) and "format" in item and item["format"] is not None:
+            try:
+                fmt_v = str(item["format"])
+            except Exception:
+                fmt_v = ""
+
+        normalized.append({
+            "index": int(idx),
+            "start": float(start_v),
+            "end": float(end_v),
+            "text": text_v,
+            "format": fmt_v,
+        })
+
+    return normalized
 
 
 if __name__ == "__main__":
