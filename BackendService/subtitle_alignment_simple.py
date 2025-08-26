@@ -63,7 +63,7 @@ is a trustworthy reference.
 
 """
 
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 import re
 
 _PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
@@ -218,8 +218,10 @@ def align_subtitles_to_transcript(
     min_duration: float = 0.4,
     min_gap: float = 0.02,
 ) -> List[Dict]:
-    """
-    Align subtitles' start/end timings to a reference transcript as much as possible.
+    """Align subtitles' start/end timings to a reference transcript as much as possible.
+
+    This function is resilient to inputs that may contain strings instead of dicts by coercing
+    each element into a dictionary with at least the 'text' field and default start/end values.
 
     Parameters
     ----------
@@ -228,12 +230,14 @@ def align_subtitles_to_transcript(
         - text: str
         - start: float (seconds)
         - end: float (seconds)
+        May contain strings; they will be coerced to dicts.
         Must be roughly chronological. Will be sorted by start.
     subtitles : List[Dict]
         List of dicts with keys:
         - text: str
         - start: float (seconds)
         - end: float (seconds)
+        May contain strings; they will be coerced to dicts.
         Will be aligned to the transcript. Will be sorted by start.
     max_span : int, optional
         Maximum number of transcript segments to consider as a contiguous match span for a single subtitle.
@@ -266,7 +270,7 @@ def align_subtitles_to_transcript(
     (0.0, 1.0)
     """
     if not isinstance(transcript, list) or not isinstance(subtitles, list):
-        raise TypeError("transcript and subtitles must be lists of dicts")
+        raise TypeError("transcript and subtitles must be lists (elements may be dicts or strings)")
 
     # Coerce items to dicts if strings are present to avoid .get on str
     t_coerced = []
