@@ -363,18 +363,21 @@ def align_subtitles_to_transcript(
     aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
 
     # Normalize output: ensure each item has only keys: index, start, end, text, format.
+    # The 'format' value must match the corresponding input subtitle's 'format' exactly if present,
+    # otherwise default to an empty string.
     normalized: List[Dict] = []
     for idx, item in enumerate(aligned, start=1):
         # Extract with defaults
         start_v = _safe_float(item.get("start", 0.0))
         end_v = _safe_float(item.get("end", 0.0))
         text_v = str(item.get("text", "") if isinstance(item, dict) else "")
+        # Carry through exact input 'format' if present, else empty string
         fmt_v = ""
-        # Some upstream paths might provide a format field; coerce to string if present
-        if isinstance(item, dict) and "format" in item and item["format"] is not None:
-            try:
-                fmt_v = str(item["format"])
-            except Exception:
+        if isinstance(item, dict) and "format" in item:
+            # Do not coerce types beyond str representation if it's not a string; keep exact value
+            fmt_v = item.get("format", "")
+            # If None, default to empty string
+            if fmt_v is None:
                 fmt_v = ""
 
         normalized.append({
