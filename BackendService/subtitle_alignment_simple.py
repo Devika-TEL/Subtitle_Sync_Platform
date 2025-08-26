@@ -363,29 +363,31 @@ def align_subtitles_to_transcript(
     aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
 
     # Normalize output: ensure each item has only keys: index, start, end, text, format.
-    # The 'format' value must match the corresponding input subtitle's 'format' exactly if present,
-    # otherwise default to an empty string.
+    # Per requirement: all outputs must use the same 'format' value, taken from the first
+    # non-empty 'format' present in the original subtitles list; default to '' if none.
+    # Determine common format from original inputs (s_cues preserves original order/fields).
+    common_format = ""
+    for orig in s_cues:
+        if isinstance(orig, dict):
+            fmt = orig.get("format")
+            # consider non-empty string values (ignore None or empty)
+            if isinstance(fmt, str) and fmt.strip():
+                common_format = fmt
+                break
+
     normalized: List[Dict] = []
     for idx, item in enumerate(aligned, start=1):
         # Extract with defaults
         start_v = _safe_float(item.get("start", 0.0))
         end_v = _safe_float(item.get("end", 0.0))
         text_v = str(item.get("text", "") if isinstance(item, dict) else "")
-        # Carry through exact input 'format' if present, else empty string
-        fmt_v = ""
-        if isinstance(item, dict) and "format" in item:
-            # Do not coerce types beyond str representation if it's not a string; keep exact value
-            fmt_v = item.get("format", "")
-            # If None, default to empty string
-            if fmt_v is None:
-                fmt_v = ""
 
         normalized.append({
             "index": int(idx),
             "start": float(start_v),
             "end": float(end_v),
             "text": text_v,
-            "format": fmt_v,
+            "format": common_format,  # enforce consistent format across all outputs
         })
 
     return normalized
