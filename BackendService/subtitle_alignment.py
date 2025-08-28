@@ -266,78 +266,155 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
         - Fills missing or blank texts with transcript text.
         - Adjusts timestamps to better match transcript segments.
         - Enforces monotonic, non-overlapping timing with minimal gaps.
+        - Prints alignment corrections to console for observability.
 
     Notes:
-        - Assumes English language and SRT format for now.
+        - If transcript is missing or very short, a placeholder distribution spreads subtitles across
+          an inferred timeline to avoid clustering at t=0.
         - Non-destructive regarding non-text fields; fields beyond the required ones are preserved if present.
     """
+    # Parameters for realistic timing
+    MIN_DUR = 0.8   # seconds
+    MAX_DUR = 6.0   # seconds
+    MIN_GAP = 0.08  # seconds between captions
+
+    def _cap_duration(d: float) -> float:
+        return max(MIN_DUR, min(MAX_DUR, d))
+
     # Defensive copies and normalization
-    subs = []
+    subs: List[Dict] = []
     for s in subtitles or []:
         subs.append({
             **s,
             "index": int(s.get("index", 0) or 0),
             "start": _safe_time(float(s.get("start", 0.0))),
-            "end": _safe_time(float(s.get("end", 0.0)) if s.get("end", 0.0) is not None else float(s.get("start", 0.0)) + 0.3),
-            "text": s.get("text", ""),
+            "end": _safe_time(float(s.get("end", 0.0)) if s.get("end", 0.0) is not None else float(s.get("start", 0.0)) + MIN_DUR),
+            "text": _normalize_space(s.get("text", "")),
             "format": s.get("format", "srt"),
         })
 
-    trans = []
+    # Normalize transcript segments
+    trans: List[Dict] = []
     for seg in transcript or []:
         seg_d = _to_seg_dict(seg)
         start = _safe_time(float(seg_d.get("start", 0.0)))
         end = _safe_time(float(seg_d.get("end", start + 0.4)))
-        text = seg_d.get("text", "")
-        trans.append({"start": start, "end": max(end, start + 0.1), "text": text})
+        if end <= start:
+            end = start + 0.4
+        text = _normalize_space(seg_d.get("text", ""))
+        trans.append({"start": start, "end": end, "text": text})
 
+    # If there are no subtitles, synthesize from transcript directly
     if not subs:
-        # If there are no subtitle entries, synthesize from transcript
-        synthesized = []
+        synthesized: List[Dict] = []
         for i, seg in enumerate(trans, start=1):
+            dur = _cap_duration(float(seg["end"]) - float(seg["start"]))
+            start = float(seg["start"])
+            end = start + dur
             synthesized.append({
                 "index": i,
-                "start": seg["start"],
-                "end": seg["end"],
+                "start": start,
+                "end": end,
                 "text": _normalize_space(seg.get("text", "")),
                 "format": "srt",
             })
-        _ensure_monotonic(synthesized)
+        _ensure_monotonic(synthesized, min_gap=MIN_GAP)
+        # Print corrections
+        for s in synthesized:
+            print(f"[align] synth {s['index']:>3}: {s['start']:.2f}->{s['end']:.2f} | {s.get('text','')}")
         return synthesized
 
-    # Normalize space and merge adjacent blank subtitles to reduce noise
-    for s in subs:
-        s["text"] = _normalize_space(s.get("text", ""))
-
+    # Merge adjacent blanks and normalize text
     subs = _merge_adjacent_blanks(subs)
 
-    # First pass: match each subtitle with the best transcript segment
+    # Duration cap for incoming subs
+    for s in subs:
+        start = float(s["start"])
+        end = float(s["end"])
+        if end <= start:
+            end = start + MIN_DUR
+        s["start"] = start
+        s["end"] = start + _cap_duration(end - start)
+
+    # Compute transcript duration; if absent, infer a fake horizon based on number of subs
+    if trans:
+        t_start = min(seg["start"] for seg in trans)
+        t_end = max(seg["end"] for seg in trans)
+        transcript_span = max(t_end - t_start, float(len(subs)) * (MIN_DUR + MIN_GAP))
+    else:
+        # Placeholder horizon: spread subs uniformly over a conservative length
+        transcript_span = float(max(10.0, len(subs) * (MIN_DUR + 0.5)))  # avoid clustering at start
+        t_start = 0.0
+
+    # First pass: match to transcript if available
     matches: List[Optional[int]] = []
     for s in subs:
         sub_iv = (float(s["start"]), float(s["end"]))
-        idx = _match_transcript_segment(sub_iv, trans)
-        # If no overlap-based good match and transcript present, pick closest by center
+        idx = _match_transcript_segment(sub_iv, trans) if trans else None
         if idx is None and trans:
             idx = _closest_transcript_index_by_time(_interval_center(sub_iv), trans)
         matches.append(idx)
 
-    # Second pass: apply text and refine timing using the matched segment
-    for s, idx in zip(subs, matches):
-        if idx is None:
-            # No transcript available; just ensure normalized text
-            s["text"] = _normalize_space(s.get("text", ""))
-            continue
-        seg = trans[idx]
-        _apply_text_from_transcript(s, seg)
-        _refit_times_to_segment(s, seg)
+    # Prepare corrected list
+    corrected: List[Dict] = []
+    # Track last end to ensure monotonicity with MIN_GAP
+    last_end = 0.0
 
-    # Enforce overall monotonic timing
-    _ensure_monotonic(subs)
+    for i, (s, idx) in enumerate(zip(subs, matches), start=1):
+        original = dict(s)
+        new_s = dict(s)
+        if idx is not None:
+            seg = trans[idx]
+            # Apply text and refit times against segment, but enforce realistic duration
+            _apply_text_from_transcript(new_s, seg)
+            _refit_times_to_segment(new_s, seg)
+            # Re-cap duration within realistic bounds
+            dur = _cap_duration(float(new_s["end"]) - float(new_s["start"]))
+            center = _interval_center((float(new_s["start"]), float(new_s["end"])))
+            new_s["start"] = max(0.0, center - dur / 2.0)
+            new_s["end"] = new_s["start"] + dur
+        else:
+            # No transcript: distribute uniformly across transcript_span to avoid clustering
+            # Place this caption at a fraction along the horizon based on its order.
+            frac = (i - 0.5) / max(1.0, float(len(subs)))
+            target_center = t_start + frac * transcript_span
+            dur = _cap_duration(float(s["end"]) - float(s["start"]))
+            new_s["start"] = max(0.0, target_center - dur / 2.0)
+            new_s["end"] = new_s["start"] + dur
+            # Keep text normalized
+            new_s["text"] = _normalize_space(new_s.get("text", ""))
+
+        # Enforce monotonic with MIN_GAP
+        if new_s["start"] < last_end + MIN_GAP:
+            shift = (last_end + MIN_GAP) - new_s["start"]
+            new_s["start"] += shift
+            new_s["end"] += shift
+
+        # Final cap: ensure duration in bounds
+        dur_final = _cap_duration(float(new_s["end"]) - float(new_s["start"]))
+        if (new_s["end"] - new_s["start"]) != dur_final:
+            new_s["end"] = new_s["start"] + dur_final
+
+        last_end = float(new_s["end"])
+
+        new_s["index"] = i
+        new_s["format"] = "srt"
+        corrected.append(new_s)
+
+        # Print correction details to console
+        if (original.get("start") != new_s["start"]) or (original.get("end") != new_s["end"]) or (_normalize_space(original.get("text","")) != new_s.get("text","")):
+            print(
+                f"[align] #{i:>3} "
+                f"t:{float(original['start']):.2f}-{float(original['end']):.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f} | "
+                f"text:{_normalize_space(original.get('text',''))!r} -> {new_s.get('text','')!r}"
+            )
+
+    # Enforce overall monotonic timing again (in-place) and minimal gap
+    _ensure_monotonic(corrected, min_gap=MIN_GAP)
 
     # Reindex to ensure indices are strictly increasing and consecutive
-    for i, s in enumerate(subs, start=1):
+    for i, s in enumerate(corrected, start=1):
         s["index"] = i
-        # ensure format as 'srt'
         s["format"] = "srt"
 
-    return subs
+    return corrected
