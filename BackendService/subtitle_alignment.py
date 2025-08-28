@@ -229,6 +229,7 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
     Strategy:
       - Snap inside segment with slight padding.
       - Preserve original duration if it fits reasonably within segment, else clamp.
+      - Snap to segment boundaries when the subtitle sits mostly outside the segment.
     Prints change details.
     """
     seg_start = float(seg.get("start", 0.0))
@@ -239,10 +240,19 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
     orig_end = float(sub.get("end", seg_end))
     orig_dur = max(0.1, orig_end - orig_start)
 
+    # If the subtitle is far outside the segment, snap to boundaries
+    overlap = _overlap((orig_start, orig_end), (seg_start, seg_end))
+    if overlap <= 0.01:
+        before_start, before_end = orig_start, orig_end
+        sub["start"] = _safe_time(seg_start)
+        sub["end"] = _safe_time(seg_end)
+        print(f"[align:refit] #{sub.get('index','?')} no-overlap -> snap to seg {before_start:.2f}-{before_end:.2f} -> {seg_start:.2f}-{seg_end:.2f}")
+        return
+
     # Preferred duration: min(original, segment duration), but not less than 0.3s
     preferred = max(0.3, min(orig_dur, seg_dur))
 
-    # Place centered on the overlap/segment center, within segment bounds
+    # Place centered on the segment center, within segment bounds
     center = _interval_center((seg_start, seg_end))
     new_start = max(seg_start, center - preferred / 2.0)
     new_end = new_start + preferred
@@ -292,7 +302,7 @@ def align_subtitles(
     Returns:
         A corrected list of subtitle dicts with the same structure. The function:
         - Aligns each subtitle to the most suitable transcript segment using overlap and proximity.
-        - Adjusts timestamps to better match transcript segments.
+        - Adjusts timestamps to better match transcript segments by snapping to segment centers or boundaries.
         - Enforces monotonic, non-overlapping timing with minimal gaps.
         - Prints alignment corrections to console for observability.
         - In monolingual mode (preserve_subtitle_text=False), may normalize/fill subtitle text using
@@ -320,25 +330,32 @@ def align_subtitles(
     # Defensive copies and normalization
     subs: List[Dict] = []
     for s in subtitles or []:
-        subs.append({
-            **s,
-            "index": int(s.get("index", 0) or 0),
-            "start": _safe_time(float(s.get("start", 0.0))),
-            "end": _safe_time(float(s.get("end", 0.0)) if s.get("end", 0.0) is not None else float(s.get("start", 0.0)) + MIN_DUR),
-            "text": _normalize_space(s.get("text", "")),
-            "format": s.get("format", "srt"),
-        })
+        try:
+            subs.append({
+                **s,
+                "index": int(s.get("index", 0) or 0),
+                "start": _safe_time(float(s.get("start", 0.0))),
+                "end": _safe_time(float(s.get("end", 0.0)) if s.get("end", 0.0) is not None else float(s.get("start", 0.0)) + MIN_DUR),
+                "text": _normalize_space(s.get("text", "")),
+                "format": s.get("format", "srt"),
+            })
+        except Exception as e:
+            # Skip malformed subtitle entries but continue processing
+            print(f"[align:error] malformed subtitle entry skipped: {e} | entry={s!r}")
 
     # Normalize transcript segments
     trans: List[Dict] = []
     for seg in transcript or []:
-        seg_d = _to_seg_dict(seg)
-        start = _safe_time(float(seg_d.get("start", 0.0)))
-        end = _safe_time(float(seg_d.get("end", start + 0.4)))
-        if end <= start:
-            end = start + 0.4
-        text = _normalize_space(seg_d.get("text", ""))
-        trans.append({"start": start, "end": end, "text": text})
+        try:
+            seg_d = _to_seg_dict(seg)
+            start = _safe_time(float(seg_d.get("start", 0.0)))
+            end = _safe_time(float(seg_d.get("end", start + 0.4)))
+            if end <= start:
+                end = start + 0.4
+            text = _normalize_space(seg_d.get("text", ""))
+            trans.append({"start": start, "end": end, "text": text})
+        except Exception as e:
+            print(f"[align:error] malformed transcript segment skipped: {e} | seg={seg!r}")
 
     # If there are no subtitles, synthesize from transcript directly
     if not subs:
@@ -442,7 +459,7 @@ def align_subtitles(
             before_text = _normalize_space(new_s.get("text", ""))
             new_text = before_text
             # nothing to change except normalization already done on input; still log if changed
-            if new_text != new_s.get("text", ""):
+            if new_text != new_s.get("text", "")):
                 print(f"[align:text] #{i:>3} normalized {new_s.get('text','')!r} -> {new_text!r}")
             new_s["text"] = new_text
 
