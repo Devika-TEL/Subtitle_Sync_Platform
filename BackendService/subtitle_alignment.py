@@ -102,12 +102,15 @@ def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02) -> None:
     Ensure start/end times are monotonic and non-overlapping in-place.
     - Enforces start_i >= prev_end + min_gap
     - Enforces end_i >= start_i + minimal duration
+    Also prints corrections for each affected subtitle.
     """
     prev_end = 0.0
     min_duration = 0.3  # don't allow zero-length subs
     for s in subs:
-        start = _safe_time(float(s.get("start", 0.0)))
-        end = _safe_time(float(s.get("end", start + min_duration)))
+        before_start = float(s.get("start", 0.0))
+        before_end = float(s.get("end", before_start + min_duration))
+        start = _safe_time(before_start)
+        end = _safe_time(before_end)
         # enforce increasing start
         if start < prev_end + min_gap:
             start = prev_end + min_gap
@@ -116,6 +119,9 @@ def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02) -> None:
             end = start + min_duration
         s["start"] = start
         s["end"] = end
+        if (before_start != start) or (before_end != end):
+            idx = s.get("index", "?")
+            print(f"[align:monotonic] #{idx} time {before_start:.2f}-{before_end:.2f} -> {start:.2f}-{end:.2f} (min_gap={min_gap:.2f})")
         prev_end = end
 
 
@@ -203,14 +209,18 @@ def _merge_adjacent_blanks(subs: List[Dict]) -> List[Dict]:
 
 
 def _apply_text_from_transcript(sub: Dict, seg: Dict) -> None:
-    """Update subtitle text from transcript segment if missing or to normalize spacing."""
-    sub_text = _normalize_space(sub.get("text", ""))
+    """Update subtitle text from transcript segment if missing or to normalize spacing. Prints change details."""
+    before = _normalize_space(sub.get("text", ""))
     seg_text = _normalize_space(seg.get("text", ""))
-    if _is_blank(sub_text) and not _is_blank(seg_text):
+    if _is_blank(before) and not _is_blank(seg_text):
         sub["text"] = seg_text
+        print(f"[align:text] #{sub.get('index','?')} text from_blank -> {seg_text!r}")
     else:
         # Normalize existing text spacing
-        sub["text"] = sub_text or seg_text
+        new_text = before or seg_text
+        sub["text"] = new_text
+        if before != new_text:
+            print(f"[align:text] #{sub.get('index','?')} normalized {before!r} -> {new_text!r}")
 
 
 def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
@@ -219,6 +229,7 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
     Strategy:
       - Snap inside segment with slight padding.
       - Preserve original duration if it fits reasonably within segment, else clamp.
+    Prints change details.
     """
     seg_start = float(seg.get("start", 0.0))
     seg_end = float(seg.get("end", seg_start + 0.4))
@@ -239,8 +250,13 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
         new_end = seg_end
         new_start = max(seg_start, new_end - preferred)
 
+    before_start = float(sub.get("start", new_start))
+    before_end = float(sub.get("end", new_end))
     sub["start"] = _safe_time(new_start)
     sub["end"] = _safe_time(new_end)
+    if (before_start != sub["start"]) or (before_end != sub["end"]):
+        idx = sub.get("index", "?")
+        print(f"[align:refit] #{idx} time {before_start:.2f}-{before_end:.2f} -> {sub['start']:.2f}-{sub['end']:.2f} (seg {seg_start:.2f}-{seg_end:.2f})")
 
 
 # PUBLIC_INTERFACE
@@ -308,33 +324,43 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
     if not subs:
         synthesized: List[Dict] = []
         for i, seg in enumerate(trans, start=1):
-            dur = _cap_duration(float(seg["end"]) - float(seg["start"]))
+            seg_len = float(seg["end"]) - float(seg["start"])
+            dur = _cap_duration(seg_len)
             start = float(seg["start"])
             end = start + dur
+            text = _normalize_space(seg.get("text", ""))
             synthesized.append({
                 "index": i,
                 "start": start,
                 "end": end,
-                "text": _normalize_space(seg.get("text", "")),
+                "text": text,
                 "format": "srt",
             })
+            print(f"[align:synthesize] #{i:>3} from transcript seg {seg['start']:.2f}-{seg['end']:.2f} len={seg_len:.2f} -> {start:.2f}-{end:.2f} | text={text!r}")
         _ensure_monotonic(synthesized, min_gap=MIN_GAP)
-        # Print corrections
-        for s in synthesized:
-            print(f"[align] synth {s['index']:>3}: {s['start']:.2f}->{s['end']:.2f} | {s.get('text','')}")
         return synthesized
 
     # Merge adjacent blanks and normalize text
+    before_count = len(subs)
     subs = _merge_adjacent_blanks(subs)
+    after_count = len(subs)
+    if after_count != before_count:
+        print(f"[align:merge] merged adjacent blank captions: {before_count} -> {after_count}")
 
     # Duration cap for incoming subs
     for s in subs:
         start = float(s["start"])
         end = float(s["end"])
         if end <= start:
+            old_end = end
             end = start + MIN_DUR
+            print(f"[align:fix] #{s.get('index','?')} end<=start {start:.2f}-{old_end:.2f} -> {start:.2f}-{end:.2f}")
+        before_dur = end - start
+        capped_end = start + _cap_duration(before_dur)
+        if capped_end != end:
+            print(f"[align:cap] #{s.get('index','?')} duration cap {before_dur:.2f}s -> {(capped_end-start):.2f}s")
         s["start"] = start
-        s["end"] = start + _cap_duration(end - start)
+        s["end"] = capped_end
 
     # Compute transcript duration; if absent, infer a fake horizon based on number of subs
     if trans:
@@ -365,48 +391,72 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
         new_s = dict(s)
         if idx is not None:
             seg = trans[idx]
+            print(f"[align:match] #{i:>3} matched transcript seg {idx} [{seg['start']:.2f}-{seg['end']:.2f}]")
             # Apply text and refit times against segment, but enforce realistic duration
             _apply_text_from_transcript(new_s, seg)
             _refit_times_to_segment(new_s, seg)
             # Re-cap duration within realistic bounds
-            dur = _cap_duration(float(new_s["end"]) - float(new_s["start"]))
+            before_dur = float(new_s["end"]) - float(new_s["start"])
+            dur = _cap_duration(before_dur)
+            if dur != before_dur:
+                print(f"[align:cap] #{i:>3} duration (after refit) {before_dur:.2f}s -> {dur:.2f}s")
             center = _interval_center((float(new_s["start"]), float(new_s["end"])))
+            before_start, before_end = float(new_s["start"]), float(new_s["end"])
             new_s["start"] = max(0.0, center - dur / 2.0)
             new_s["end"] = new_s["start"] + dur
+            if (before_start != new_s['start']) or (before_end != new_s['end']):
+                print(f"[align:center] #{i:>3} centered {before_start:.2f}-{before_end:.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f}")
         else:
             # No transcript: distribute uniformly across transcript_span to avoid clustering
             # Place this caption at a fraction along the horizon based on its order.
             frac = (i - 0.5) / max(1.0, float(len(subs)))
             target_center = t_start + frac * transcript_span
             dur = _cap_duration(float(s["end"]) - float(s["start"]))
+            before_start, before_end = float(s["start"]), float(s["end"])
             new_s["start"] = max(0.0, target_center - dur / 2.0)
             new_s["end"] = new_s["start"] + dur
+            print(f"[align:distribute] #{i:>3} {before_start:.2f}-{before_end:.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f} (uniform over {transcript_span:.2f}s)")
             # Keep text normalized
-            new_s["text"] = _normalize_space(new_s.get("text", ""))
+            before_text = _normalize_space(new_s.get("text", ""))
+            new_text = before_text
+            # nothing to change except normalization already done on input; still log if changed
+            if new_text != new_s.get("text", ""):
+                print(f"[align:text] #{i:>3} normalized {new_s.get('text','')!r} -> {new_text!r}")
+            new_s["text"] = new_text
 
         # Enforce monotonic with MIN_GAP
         if new_s["start"] < last_end + MIN_GAP:
             shift = (last_end + MIN_GAP) - new_s["start"]
+            before_start, before_end = float(new_s["start"]), float(new_s["end"])
             new_s["start"] += shift
             new_s["end"] += shift
+            print(f"[align:gap] #{i:>3} shift +{shift:.2f}s to enforce gap -> {new_s['start']:.2f}-{new_s['end']:.2f} (prev_end={last_end:.2f})")
 
         # Final cap: ensure duration in bounds
-        dur_final = _cap_duration(float(new_s["end"]) - float(new_s["start"]))
+        dur_final_cap_in = float(new_s["end"]) - float(new_s["start"])
+        dur_final = _cap_duration(dur_final_cap_in)
         if (new_s["end"] - new_s["start"]) != dur_final:
+            before_end = float(new_s["end"])
             new_s["end"] = new_s["start"] + dur_final
+            print(f"[align:cap] #{i:>3} final duration cap {dur_final_cap_in:.2f}s -> {(new_s['end']-new_s['start']):.2f}s (end {before_end:.2f} -> {new_s['end']:.2f})")
 
         last_end = float(new_s["end"])
 
+        # Field-wise change logging
+        if original.get("format", "srt") != "srt":
+            print(f"[align:format] #{i:>3} format {original.get('format')} -> 'srt'")
         new_s["index"] = i
         new_s["format"] = "srt"
         corrected.append(new_s)
 
-        # Print correction details to console
-        if (original.get("start") != new_s["start"]) or (original.get("end") != new_s["end"]) or (_normalize_space(original.get("text","")) != new_s.get("text","")):
+        # Print consolidated correction summary for this subtitle
+        changed_text = (_normalize_space(original.get("text","")) != new_s.get("text",""))
+        changed_time = (float(original.get("start", 0.0)) != float(new_s["start"])) or (float(original.get("end", 0.0)) != float(new_s["end"]))
+        if changed_time or changed_text:
             print(
-                f"[align] #{i:>3} "
-                f"t:{float(original['start']):.2f}-{float(original['end']):.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f} | "
-                f"text:{_normalize_space(original.get('text',''))!r} -> {new_s.get('text','')!r}"
+                f"[align:summary] #{i:>3} "
+                f"time {float(original.get('start',0.0)):.2f}-{float(original.get('end',0.0)):.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f} | "
+                f"text {(_normalize_space(original.get('text','')))!r} -> {new_s.get('text','')!r}"
             )
 
     # Enforce overall monotonic timing again (in-place) and minimal gap
@@ -414,6 +464,8 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
 
     # Reindex to ensure indices are strictly increasing and consecutive
     for i, s in enumerate(corrected, start=1):
+        if s.get("index") != i:
+            print(f"[align:index] #{s.get('index','?')} -> #{i}")
         s["index"] = i
         s["format"] = "srt"
 
