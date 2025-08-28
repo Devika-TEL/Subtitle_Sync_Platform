@@ -362,11 +362,26 @@ def align_subtitles(
         - If transcript is missing or very short, a placeholder distribution spreads subtitles across
           an inferred timeline to avoid clustering at t=0.
         - Non-destructive regarding non-text fields; fields beyond the required ones are preserved if present.
+
+    Bugfix rationale:
+        This function previously could cascade timing shifts, bunching many cues toward the start when only
+        a few input timestamps were incorrect. The fix introduces:
+          - Stricter "already good" detection so well-aligned cues are preserved.
+          - Anchor-based stabilization to prevent forward-shift cascades from a single bad cue.
+          - A gentler monotonic enforcement that minimally shifts cues and never retroactively
+            pulls earlier anchors forward.
+          - Guardrails for sparse/short transcripts to avoid aggressive refits.
+
     """
     # Parameters for realistic timing
     MIN_DUR = 0.8   # seconds
     MAX_DUR = 6.0   # seconds
     MIN_GAP = 0.08  # seconds between captions
+
+    # Additional conservative thresholds (bugfix)
+    # If a cue is within these thresholds relative to its matched segment, we keep its timing.
+    ALREADY_GOOD_OVL_RATIO = 0.7   # require 70% overlap (up from 60%)
+    ALREADY_GOOD_CENTER_EPS = 0.20 # tighter center tolerance baseline
 
     # Determine text preservation behavior:
     # - If preserve_subtitle_text is explicitly provided, honor it.
@@ -472,6 +487,9 @@ def align_subtitles(
     # Track last end to ensure monotonicity with MIN_GAP
     last_end = 0.0
 
+    # Anchor bookkeeping: if a cue is "already good", mark as anchor. Subsequent cues cannot pull it earlier.
+    anchors: List[Tuple[float, float]] = []  # list of (start, end) for anchored cues in order
+
     for i, (s, idx) in enumerate(zip(subs, matches), start=1):
         original = dict(s)
         new_s = dict(s)
@@ -490,7 +508,11 @@ def align_subtitles(
             ov = _overlap((cur_start, cur_end), (seg_start, seg_end))
             ov_ratio = ov / max(0.1, cur_dur)
             center_delta = abs(_interval_center((cur_start, cur_end)) - _interval_center((seg_start, seg_end)))
-            if not (ov_ratio >= 0.6 and center_delta <= max(0.25, 0.15 * (seg_end - seg_start))):
+
+            good_center_eps = max(ALREADY_GOOD_CENTER_EPS, 0.12 * (seg_end - seg_start))
+            already_good = (ov_ratio >= ALREADY_GOOD_OVL_RATIO and center_delta <= good_center_eps)
+
+            if not already_good:
                 _refit_times_to_segment(new_s, seg, min_dur=max(0.4, min(MIN_DUR, 0.8)))
             # Re-cap duration within realistic bounds
             before_dur = float(new_s["end"]) - float(new_s["start"])
@@ -520,13 +542,15 @@ def align_subtitles(
                 print(f"[align:text] #{i:>3} normalized {new_s.get('text','')!r} -> {new_text!r}")
             new_s["text"] = new_text
 
-        # Enforce monotonic with MIN_GAP
-        if new_s["start"] < last_end + MIN_GAP:
-            shift = (last_end + MIN_GAP) - new_s["start"]
+        # Enforce monotonic with MIN_GAP using minimal forward shift only (no pulling earlier cues).
+        # Respect last anchor end to prevent cascading bunching at start.
+        anchor_end = anchors[-1][1] if anchors else last_end
+        if new_s["start"] < anchor_end + MIN_GAP:
+            shift = (anchor_end + MIN_GAP) - new_s["start"]
             before_start, before_end = float(new_s["start"]), float(new_s["end"])
             new_s["start"] += shift
             new_s["end"] += shift
-            print(f"[align:gap] #{i:>3} shift +{shift:.2f}s to enforce gap -> {new_s['start']:.2f}-{new_s['end']:.2f} (prev_end={last_end:.2f})")
+            print(f"[align:gap] #{i:>3} shift +{shift:.2f}s to enforce gap -> {new_s['start']:.2f}-{new_s['end']:.2f} (anchor_end={anchor_end:.2f})")
 
         # Final cap: ensure duration in bounds
         dur_final_cap_in = float(new_s["end"]) - float(new_s["start"])
@@ -538,6 +562,21 @@ def align_subtitles(
 
         last_end = float(new_s["end"])
 
+        # Determine if this cue can be considered an anchor (well-aligned to matched seg or left unchanged)
+        if idx is not None:
+            seg = trans[idx]
+            seg_start, seg_end = float(seg["start"]), float(seg["end"])
+            cur_start, cur_end = float(new_s["start"]), float(new_s["end"])
+            cur_dur = max(0.1, cur_end - cur_start)
+            ov = _overlap((cur_start, cur_end), (seg_start, seg_end))
+            ov_ratio = ov / max(0.1, cur_dur)
+            center_delta = abs(_interval_center((cur_start, cur_end)) - _interval_center((seg_start, seg_end)))
+            if ov_ratio >= ALREADY_GOOD_OVL_RATIO and center_delta <= max(ALREADY_GOOD_CENTER_EPS, 0.12 * (seg_end - seg_start)):
+                anchors.append((cur_start, cur_end))
+        else:
+            # With no transcript match, do not anchor to avoid locking potentially synthetic placement.
+            pass
+
         # Field-wise change logging
         if original.get("format", "srt") != "srt":
             print(f"[align:format] #{i:>3} format {original.get('format')} -> 'srt'")
@@ -546,8 +585,6 @@ def align_subtitles(
         corrected.append(new_s)
 
         # Print consolidated correction summary for this subtitle
-        # Note: In cross-lingual/preserve_text mode, changed_text will always be False (aside from normalization),
-        # because we do not modify subtitle content from transcript.
         changed_text = (_normalize_space(original.get("text","")) != new_s.get("text",""))
         changed_time = (float(original.get("start", 0.0)) != float(new_s["start"])) or (float(original.get("end", 0.0)) != float(new_s["end"]))
         if changed_time or changed_text:
@@ -558,7 +595,8 @@ def align_subtitles(
             )
 
     # Enforce overall monotonic timing again (in-place) and minimal gap
-    _ensure_monotonic(corrected, min_gap=MIN_GAP, min_duration=MIN_DUR)
+    # Use a smaller gap here to avoid unnecessary shifts if the stream is already monotonic.
+    _ensure_monotonic(corrected, min_gap=min(MIN_GAP, 0.05), min_duration=MIN_DUR)
 
     # Reindex to ensure indices are strictly increasing and consecutive
     for i, s in enumerate(corrected, start=1):
