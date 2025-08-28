@@ -260,7 +260,13 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
 
 
 # PUBLIC_INTERFACE
-def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]:
+def align_subtitles(
+    transcript: List[Dict],
+    subtitles: List[Dict],
+    *,
+    cross_lingual: bool = False,
+    preserve_subtitle_text: Optional[bool] = None,
+) -> List[Dict]:
     """
     Align and correct SRT subtitles using a Whisper transcript.
 
@@ -275,14 +281,23 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
             - 'end' (float, seconds)
             - 'text' (str, may be empty/blank)
             - 'format' (str, 'srt')
+        cross_lingual: When True, indicates that the audio/transcript language differs from the
+            subtitle language. In this mode, alignment will ONLY modify timing and will NEVER
+            modify the subtitle text. This is safe for aligning translations without overwriting text.
+        preserve_subtitle_text: Optional explicit override. If provided, it takes precedence over
+            cross_lingual to decide whether text can be changed. If True, text is preserved
+            (timings-only). If False, text may be updated from the transcript. If None, it falls back
+            to `True` when cross_lingual is True, otherwise `False`.
 
     Returns:
         A corrected list of subtitle dicts with the same structure. The function:
         - Aligns each subtitle to the most suitable transcript segment using overlap and proximity.
-        - Fills missing or blank texts with transcript text.
         - Adjusts timestamps to better match transcript segments.
         - Enforces monotonic, non-overlapping timing with minimal gaps.
         - Prints alignment corrections to console for observability.
+        - In monolingual mode (preserve_subtitle_text=False), may normalize/fill subtitle text using
+          transcript text. In cross-lingual/timings-only mode (preserve_subtitle_text=True), never
+          changes the subtitle text.
 
     Notes:
         - If transcript is missing or very short, a placeholder distribution spreads subtitles across
@@ -293,6 +308,11 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
     MIN_DUR = 0.8   # seconds
     MAX_DUR = 6.0   # seconds
     MIN_GAP = 0.08  # seconds between captions
+
+    # Determine text preservation behavior:
+    # - If preserve_subtitle_text is explicitly provided, honor it.
+    # - Else, default to preserving text in cross-lingual mode, and allowing text normalization/updates otherwise.
+    preserve_text = preserve_subtitle_text if preserve_subtitle_text is not None else bool(cross_lingual)
 
     def _cap_duration(d: float) -> float:
         return max(MIN_DUR, min(MAX_DUR, d))
@@ -392,8 +412,10 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
         if idx is not None:
             seg = trans[idx]
             print(f"[align:match] #{i:>3} matched transcript seg {idx} [{seg['start']:.2f}-{seg['end']:.2f}]")
-            # Apply text and refit times against segment, but enforce realistic duration
-            _apply_text_from_transcript(new_s, seg)
+            # In timings-only (cross-lingual) mode, do not modify subtitle text.
+            # Otherwise, apply transcript text when appropriate (e.g., to fill blanks/normalize).
+            if not preserve_text:
+                _apply_text_from_transcript(new_s, seg)
             _refit_times_to_segment(new_s, seg)
             # Re-cap duration within realistic bounds
             before_dur = float(new_s["end"]) - float(new_s["start"])
@@ -416,7 +438,7 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
             new_s["start"] = max(0.0, target_center - dur / 2.0)
             new_s["end"] = new_s["start"] + dur
             print(f"[align:distribute] #{i:>3} {before_start:.2f}-{before_end:.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f} (uniform over {transcript_span:.2f}s)")
-            # Keep text normalized
+            # Keep text normalized only; never inject transcript-based content here.
             before_text = _normalize_space(new_s.get("text", ""))
             new_text = before_text
             # nothing to change except normalization already done on input; still log if changed
@@ -450,6 +472,8 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
         corrected.append(new_s)
 
         # Print consolidated correction summary for this subtitle
+        # Note: In cross-lingual/preserve_text mode, changed_text will always be False (aside from normalization),
+        # because we do not modify subtitle content from transcript.
         changed_text = (_normalize_space(original.get("text","")) != new_s.get("text",""))
         changed_time = (float(original.get("start", 0.0)) != float(new_s["start"])) or (float(original.get("end", 0.0)) != float(new_s["end"]))
         if changed_time or changed_text:
