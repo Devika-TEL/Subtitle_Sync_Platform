@@ -6,7 +6,7 @@ using a Whisper model transcript as reference. It fixes missing texts,
 improves timestamps, and enforces monotonic timing for SRT-like subtitles.
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import re
 
 
@@ -38,6 +38,63 @@ def _interval_center(iv: Tuple[float, float]) -> float:
 def _safe_time(t: float) -> float:
     """Clamp negative timestamps to 0."""
     return max(0.0, float(t))
+
+
+def _get_seg_value(seg: Any, key: str, default: Any = None) -> Any:
+    """
+    Safely get a value from a transcript segment which may be:
+      - a dict-like object with .get
+      - an object with attributes
+      - or even an unexpected type (string, etc.)
+
+    Returns default if the key is unavailable or conversion fails.
+    """
+    try:
+        # dict-like
+        if hasattr(seg, "get"):
+            return seg.get(key, default)
+        # object-like attribute
+        if hasattr(seg, key):
+            return getattr(seg, key, default)
+    except Exception:
+        pass
+    return default
+
+
+def _to_seg_dict(seg: Any) -> Dict[str, Any]:
+    """
+    Normalize an arbitrary transcript segment into a dict with start/end/text keys.
+    If seg is a string, treat it as text with unknown times defaulting to 0 and small duration.
+    """
+    text = ""
+    if isinstance(seg, str):
+        text = seg
+    else:
+        # Try to extract text field
+        txt = _get_seg_value(seg, "text", "")
+        text = txt if isinstance(txt, str) else str(txt) if txt is not None else ""
+
+    start_val = _get_seg_value(seg, "start", 0.0)
+    end_val = _get_seg_value(seg, "end", None)
+
+    try:
+        start = _safe_time(float(start_val))
+    except Exception:
+        start = 0.0
+
+    if end_val is None:
+        # assume short duration if end not provided
+        end = start + 0.4
+    else:
+        try:
+            end = _safe_time(float(end_val))
+        except Exception:
+            end = start + 0.4
+
+    if end <= start:
+        end = start + 0.1
+
+    return {"start": start, "end": end, "text": text}
 
 
 def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02) -> None:
@@ -82,7 +139,8 @@ def _match_transcript_segment(
     sub_center = _interval_center(sub_iv)
 
     for i, seg in enumerate(transcript):
-        t_iv = (float(seg.get("start", 0.0)), float(seg.get("end", 0.0)))
+        seg_d = _to_seg_dict(seg)
+        t_iv = (float(seg_d.get("start", 0.0)), float(seg_d.get("end", 0.0)))
         ov = _overlap(sub_iv, t_iv)
         if ov > best_overlap + 1e-9:
             best_idx = i
@@ -107,7 +165,8 @@ def _closest_transcript_index_by_time(point: float, transcript: List[Dict]) -> O
     best_idx = None
     best_dist = float("inf")
     for i, seg in enumerate(transcript):
-        center = _interval_center((float(seg.get("start", 0.0)), float(seg.get("end", 0.0))))
+        seg_d = _to_seg_dict(seg)
+        center = _interval_center((float(seg_d.get("start", 0.0)), float(seg_d.get("end", 0.0))))
         d = abs(center - point)
         if d < best_dist:
             best_dist = d
@@ -226,9 +285,10 @@ def align_subtitles(transcript: List[Dict], subtitles: List[Dict]) -> List[Dict]
 
     trans = []
     for seg in transcript or []:
-        start = _safe_time(float(seg.get("start", 0.0)))
-        end = _safe_time(float(seg.get("end", start + 0.4)))
-        text = seg.get("text", "")
+        seg_d = _to_seg_dict(seg)
+        start = _safe_time(float(seg_d.get("start", 0.0)))
+        end = _safe_time(float(seg_d.get("end", start + 0.4)))
+        text = seg_d.get("text", "")
         trans.append({"start": start, "end": max(end, start + 0.1), "text": text})
 
     if not subs:
