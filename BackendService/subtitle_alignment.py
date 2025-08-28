@@ -9,6 +9,19 @@ Note:
 - Aligned subtitles are represented with 'start' and 'end' as float seconds.
   To export these to SRT text reliably, use subtitle_time_utils.write_srt()
   which handles accurate hh:mm:ss,mmm formatting and edge cases.
+
+Debugging and input preparation tips:
+- Provide transcript segments with realistic start/end in seconds, sorted by time.
+- If aligning translations, call align_subtitles(..., cross_lingual=True) to avoid overwriting text.
+- Use console logs prefixed with [align:*] to understand how each cue was matched and refit.
+  Frequent [align:refit] snap-to-seg messages indicate poor initial timing or transcript mismatch.
+- If you observe many [align:cap] messages shrinking durations, consider increasing MAX_DUR or check whether your transcript has very short segments.
+- Ensure there are no negative times; this module clamps negatives to 0.0.
+
+Typical failure scenarios:
+- Transcript language mismatch but cross_lingual not set -> text gets normalized undesirably (set cross_lingual=True).
+- Very sparse or noisy transcript (huge gaps) -> cues may be distributed or snapped unexpectedly; pre-smooth or segment transcript to speaking regions.
+- Overlapping input subtitles -> module will enforce minimal gaps and durations, which can shift later cues forward; consider pre-validating input files.
 """
 
 from typing import List, Dict, Tuple, Optional, Any
@@ -102,15 +115,16 @@ def _to_seg_dict(seg: Any) -> Dict[str, Any]:
     return {"start": start, "end": end, "text": text}
 
 
-def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02) -> None:
+def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02, min_duration: float = 0.3) -> None:
     """
     Ensure start/end times are monotonic and non-overlapping in-place.
     - Enforces start_i >= prev_end + min_gap
-    - Enforces end_i >= start_i + minimal duration
+    - Enforces end_i >= start_i + min_duration
     Also prints corrections for each affected subtitle.
+
+    Note: min_duration is injected by the caller to keep consistency with top-level MIN_DUR.
     """
     prev_end = 0.0
-    min_duration = 0.3  # don't allow zero-length subs
     for s in subs:
         before_start = float(s.get("start", 0.0))
         before_end = float(s.get("end", before_start + min_duration))
@@ -126,7 +140,7 @@ def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02) -> None:
         s["end"] = end
         if (before_start != start) or (before_end != end):
             idx = s.get("index", "?")
-            print(f"[align:monotonic] #{idx} time {before_start:.2f}-{before_end:.2f} -> {start:.2f}-{end:.2f} (min_gap={min_gap:.2f})")
+            print(f"[align:monotonic] #{idx} time {before_start:.2f}-{before_end:.2f} -> {start:.2f}-{end:.2f} (min_gap={min_gap:.2f}, min_dur={min_duration:.2f})")
         prev_end = end
 
 
@@ -228,24 +242,25 @@ def _apply_text_from_transcript(sub: Dict, seg: Dict) -> None:
             print(f"[align:text] #{sub.get('index','?')} normalized {before!r} -> {new_text!r}")
 
 
-def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
+def _refit_times_to_segment(sub: Dict, seg: Dict, *, min_dur: float = 0.5) -> None:
     """
     Adjust subtitle start/end to better fit transcript segment while keeping relative duration reasonable.
 
-    Conservative strategy to avoid unnecessary changes:
+    Strategy:
       - If the subtitle already fits well (good overlap and small offset), keep original times.
-      - If there is no or minimal overlap, snap to the segment (clear mismatch).
-      - Otherwise, gently adjust within segment preserving as much of original duration as possible.
+      - If there is effectively no overlap, snap entirely to the segment (mismatch).
+      - Otherwise, preserve original duration as much as possible, clamped within [seg_start, seg_end].
+        If preserving original duration is impossible within segment, use the largest possible duration inside.
 
     Prints change details when times are modified.
     """
     seg_start = float(seg.get("start", 0.0))
     seg_end = float(seg.get("end", seg_start + 0.4))
-    seg_dur = max(0.1, seg_end - seg_start)
+    seg_dur = max(min_dur, seg_end - seg_start)
 
     orig_start = float(sub.get("start", seg_start))
     orig_end = float(sub.get("end", seg_end))
-    orig_dur = max(0.1, orig_end - orig_start)
+    orig_dur = max(min_dur, orig_end - orig_start)
 
     # Compute overlap and center offset
     overlap = _overlap((orig_start, orig_end), (seg_start, seg_end))
@@ -256,7 +271,7 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
     # Heuristics for "already good":
     # - At least 60% of the subtitle duration overlaps with the segment
     # - And center offset is small (<= 0.25s or <= 15% of seg duration)
-    overlap_ratio = overlap / max(0.1, orig_dur)
+    overlap_ratio = overlap / max(min_dur, orig_dur)
     small_offset = center_offset <= max(0.25, 0.15 * seg_dur)
 
     if overlap_ratio >= 0.6 and small_offset:
@@ -264,23 +279,35 @@ def _refit_times_to_segment(sub: Dict, seg: Dict) -> None:
         return
 
     # If the subtitle is far outside the segment, snap to boundaries
-    if overlap <= 0.01:
+    if overlap <= 1e-3:
         before_start, before_end = orig_start, orig_end
         sub["start"] = _safe_time(seg_start)
         sub["end"] = _safe_time(seg_end)
         print(f"[align:refit] #{sub.get('index','?')} no-overlap -> snap to seg {before_start:.2f}-{before_end:.2f} -> {seg_start:.2f}-{seg_end:.2f}")
         return
 
-    # Preferred duration: mostly preserve original but cap by segment
-    preferred = max(0.3, min(orig_dur, seg_dur))
+    # Preferred duration: preserve original but cannot exceed seg duration
+    preferred = max(min_dur, min(orig_dur, seg_dur))
 
-    # Place centered closer to current subtitle center to avoid big jumps, but keep within segment
-    target_center = max(seg_start, min(seg_end, sub_center))
-    new_start = max(seg_start, target_center - preferred / 2.0)
-    new_end = new_start + preferred
+    # Try to center near current subtitle center but clamp inside segment
+    target_center = min(max(seg_start, sub_center), seg_end)
+    new_start = target_center - preferred / 2.0
+    new_end = target_center + preferred / 2.0
+
+    # Clamp to segment boundaries
+    if new_start < seg_start:
+        shift = seg_start - new_start
+        new_start += shift
+        new_end += shift
     if new_end > seg_end:
+        shift = new_end - seg_end
+        new_start -= shift
+        new_end -= shift
+
+    # If still outside due to segment being shorter than preferred, fallback to full segment
+    if new_start < seg_start or new_end > seg_end or (new_end - new_start) < min_dur:
+        new_start = seg_start
         new_end = seg_end
-        new_start = max(seg_start, new_end - preferred)
 
     before_start = float(sub.get("start", new_start))
     before_end = float(sub.get("end", new_end))
@@ -396,7 +423,7 @@ def align_subtitles(
                 "format": "srt",
             })
             print(f"[align:synthesize] #{i:>3} from transcript seg {seg['start']:.2f}-{seg['end']:.2f} len={seg_len:.2f} -> {start:.2f}-{end:.2f} | text={text!r}")
-        _ensure_monotonic(synthesized, min_gap=MIN_GAP)
+        _ensure_monotonic(synthesized, min_gap=MIN_GAP, min_duration=MIN_DUR)
         return synthesized
 
     # Merge adjacent blanks and normalize text
@@ -464,20 +491,17 @@ def align_subtitles(
             ov_ratio = ov / max(0.1, cur_dur)
             center_delta = abs(_interval_center((cur_start, cur_end)) - _interval_center((seg_start, seg_end)))
             if not (ov_ratio >= 0.6 and center_delta <= max(0.25, 0.15 * (seg_end - seg_start))):
-                _refit_times_to_segment(new_s, seg)
+                _refit_times_to_segment(new_s, seg, min_dur=max(0.4, min(MIN_DUR, 0.8)))
             # Re-cap duration within realistic bounds
             before_dur = float(new_s["end"]) - float(new_s["start"])
             dur = _cap_duration(before_dur)
             if dur != before_dur:
                 print(f"[align:cap] #{i:>3} duration (after refit) {before_dur:.2f}s -> {dur:.2f}s")
-            # Only re-center if we actually changed duration significantly (>=0.2s)
-            if abs(dur - before_dur) >= 0.2:
-                center = _interval_center((float(new_s["start"]), float(new_s["end"])))
-                before_start, before_end = float(new_s["start"]), float(new_s["end"])
-                new_s["start"] = max(0.0, center - dur / 2.0)
+                # Adjust end only to respect cap; avoid re-centering to prevent drift
+                before_end_adj = float(new_s["end"])
                 new_s["end"] = new_s["start"] + dur
-                if (before_start != new_s['start']) or (before_end != new_s['end']):
-                    print(f"[align:center] #{i:>3} centered {before_start:.2f}-{before_end:.2f} -> {new_s['start']:.2f}-{new_s['end']:.2f}")
+                if before_end_adj != new_s["end"]:
+                    print(f"[align:endcap] #{i:>3} end {before_end_adj:.2f} -> {new_s['end']:.2f}")
         else:
             # No transcript: distribute uniformly across transcript_span to avoid clustering
             # Place this caption at a fraction along the horizon based on its order.
@@ -534,7 +558,7 @@ def align_subtitles(
             )
 
     # Enforce overall monotonic timing again (in-place) and minimal gap
-    _ensure_monotonic(corrected, min_gap=MIN_GAP)
+    _ensure_monotonic(corrected, min_gap=MIN_GAP, min_duration=MIN_DUR)
 
     # Reindex to ensure indices are strictly increasing and consecutive
     for i, s in enumerate(corrected, start=1):
