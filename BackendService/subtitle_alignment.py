@@ -4,6 +4,11 @@ Subtitle alignment utilities.
 This module provides functionality to align and correct subtitle entries
 using a Whisper model transcript as reference. It fixes missing texts,
 improves timestamps, and enforces monotonic timing for SRT-like subtitles.
+
+Note:
+- Aligned subtitles are represented with 'start' and 'end' as float seconds.
+  To export these to SRT text reliably, use subtitle_time_utils.write_srt()
+  which handles accurate hh:mm:ss,mmm formatting and edge cases.
 """
 
 from typing import List, Dict, Tuple, Optional, Any

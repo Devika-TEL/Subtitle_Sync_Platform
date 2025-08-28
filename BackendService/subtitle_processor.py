@@ -14,6 +14,17 @@ from typing import Optional, List, Dict
 import uuid
 import re
 
+# Optional import for standardized SRT export from seconds.
+# Use when you have structured subtitle dicts with 'start'/'end' (in seconds) and 'text'.
+try:
+    from .subtitle_time_utils import write_srt
+except Exception:
+    # Support running as a module script as well
+    try:
+        from subtitle_time_utils import write_srt
+    except Exception:
+        write_srt = None  # type: ignore
+
 
 def _write_processed_stub(basename: str, content: str, processed_dir: str) -> str:
     out = Path(processed_dir) / basename
@@ -85,7 +96,13 @@ def translate_subtitles(
     processed_dir: str,
     model_hint: Optional[str] = None,
 ) -> str:
-    """Pretend-translate by appending language codes to text lines, preserving SRT structure."""
+    """Pretend-translate by appending language codes to text lines, preserving SRT structure.
+
+    If this function evolves to accept or produce structured subtitles with 'start'/'end'
+    expressed in seconds, use the standardized SRT writer to emit accurate timestamp strings:
+        from subtitle_time_utils import write_srt
+        srt_text = write_srt(subtitles_list)
+    """
     src = Path(subtitle_path).read_text(encoding="utf-8", errors="ignore")
     lines = src.splitlines()
     out_lines: List[str] = []
