@@ -77,3 +77,31 @@ def test_cross_lingual_preserves_text():
     subs = [mk_sub(1, 1.0, 1.8, "FR texte")]
     out = align_subtitles(transcript, subs, cross_lingual=True)
     assert out[0]["text"] == "FR texte"
+
+
+# PUBLIC_INTERFACE
+def test_alignment_no_time_compression_over_two_minutes():
+    """
+    Ensure alignment does not compress a 2-minute range into a few seconds.
+    We simulate a transcript spanning ~0..120s and subtitles roughly matching.
+    """
+    # Create a transcript covering 0..120s with 12 segments of 10s each
+    transcript = []
+    for i in range(12):
+        s = i * 10.0
+        e = s + 10.0
+        transcript.append(mk_seg(s, e, f"T{i+1}"))
+
+    # Subtitles roughly aligned with small jitter, spanning the same window
+    subs = []
+    for i in range(12):
+        s = i * 10.0 + (0.2 if i % 2 == 0 else 0.0)
+        e = s + 8.0
+        subs.append(mk_sub(i + 1, s, e, f"S{i+1}"))
+
+    out = align_subtitles(transcript, subs, cross_lingual=True)
+    assert len(out) == 12
+    # Start near 0 and end should be close to 120 (allowing for caps/gaps)
+    assert out[0]["start"] >= 0.0
+    assert out[-1]["end"] > 100.0
+    assert out[-1]["end"] <= 125.0

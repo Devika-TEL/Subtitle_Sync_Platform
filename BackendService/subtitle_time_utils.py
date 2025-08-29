@@ -5,6 +5,12 @@ This module centralizes the logic for converting between seconds (float)
 and SRT timestamp strings, and for exporting a list of subtitle dictionaries
 into valid SRT text.
 
+CRITICAL UNITS NOTE:
+- All timing values handled by this module are in seconds (float).
+- Do NOT pass milliseconds to these functions. If your input times are in
+  milliseconds, convert them by dividing by 1000.0 before calling these
+  utilities. Example: seconds = ms / 1000.0
+
 Design decisions:
 - Clamp negative times to 0.0 to avoid negative timestamps in output.
 - Properly round milliseconds and carry to seconds/minutes/hours when needed.
@@ -83,12 +89,31 @@ def srt_timestamp_to_seconds(ts: str) -> float:
 
 
 def _normalize_cue_times(start: float, end: float) -> Tuple[float, float]:
-    """Ensure non-negative times and minimum duration."""
+    """Ensure non-negative times and minimum duration (seconds)."""
     s = _clamp_non_negative(start)
     e = _clamp_non_negative(end if end is not None else s + _MIN_DURATION)
     if e <= s:
         e = s + _MIN_DURATION
     return s, e
+
+
+def _looks_like_milliseconds(values: List[float]) -> bool:
+    """
+    Heuristic: detect if provided times likely represent milliseconds.
+    Returns True if median value is large (e.g., > 3000) and min>100 suggesting ms scale.
+    This is for diagnostics only; we DO NOT auto-convert.
+    """
+    if not values:
+        return False
+    try:
+        arr = sorted(abs(float(v)) for v in values if v is not None)
+        if not arr:
+            return False
+        median = arr[len(arr)//2]
+        mn = arr[0]
+        return (median > 3000.0) and (mn > 100.0)
+    except Exception:
+        return False
 
 
 # PUBLIC_INTERFACE
