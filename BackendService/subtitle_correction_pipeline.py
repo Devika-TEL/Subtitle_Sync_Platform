@@ -166,7 +166,9 @@ def correct_subtitles_pipeline(
         enable_audio_correction=True and audio_source is provided.
 
     Returns:
-    - List[Dict]: corrected cues with the same structure as input.
+    - List[Dict]: corrected cues with the same structure as input. All 'start' and 'end'
+      values are seconds (float). If input cues used string timecodes, they are converted
+      to seconds on ingestion and preserved as seconds in the output.
 
     Pipeline:
     1) Normalize whitespace/punctuation.
@@ -194,12 +196,36 @@ def correct_subtitles_pipeline(
 
     # 1) Basic normalization
     for c in working:
+        # Normalize text
         raw_text = c.get("text", "")
         safe_text = clean_text(raw_text)
         if raw_text is None or _is_nan_value(raw_text) or isinstance(raw_text, (int, float)):
             logger.debug("correct_subtitles_pipeline: normalized non-string cue text for index=%s value=%r",
                          c.get("index"), raw_text)
         c["text"] = _normalize_text(safe_text)
+
+        # Normalize times: ensure start/end are seconds (float), never string timecodes.
+        # Accepts either float seconds or SRT-like strings, falls back to 0.0.
+        start_val = c.get("start", 0.0)
+        end_val = c.get("end", 0.0)
+        def _to_seconds(v: Any) -> float:
+            if isinstance(v, (int, float)):
+                try:
+                    return float(v)
+                except Exception:
+                    return 0.0
+            if isinstance(v, str):
+                return _timestamp_to_seconds(v)
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        start_s = _to_seconds(start_val)
+        end_s = _to_seconds(end_val)
+        if end_s < start_s:
+            end_s = start_s
+        c["start"] = float(start_s)
+        c["end"] = float(end_s)
 
     # 2) Grammar/Spell
     if enable_grammar:
@@ -595,11 +621,10 @@ def _apply_transcript_timing_and_text_corrections(
         if _is_change_reasonable(sub_text, chosen_text):
             c["text"] = chosen_text
 
-        # Update timing if snapped
+        # Update timing if snapped (keep as seconds, not SRT strings)
         if new_start != start_s or new_end != end_s:
-            # Convert back to SRT-like timestamp preserving format style (assume SRT)
-            c["start"] = _seconds_to_timestamp(new_start)
-            c["end"] = _seconds_to_timestamp(new_end)
+            c["start"] = float(new_start)
+            c["end"] = float(new_end)
 
 
 def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
@@ -763,6 +788,7 @@ def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> boo
 def _timestamp_to_seconds(ts: str) -> float:
     """
     Convert SRT-like timestamp "HH:MM:SS,mmm" to seconds as float.
+    If input is already numeric-coercible, returns float(ts).
     """
     if not isinstance(ts, str):
         try:

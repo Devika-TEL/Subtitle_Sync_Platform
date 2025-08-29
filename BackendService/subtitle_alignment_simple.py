@@ -31,8 +31,8 @@ Data contracts (updated):
     - If list: same structure; non-dict coerced to text-only with 0.0 times
 - subtitles: List[dict] of cues with keys:
     - "index": int (sequence; auto-filled if missing)
-    - "start": float (seconds; default 0.0)
-    - "end": float (seconds; default 0.0; fixed to be >= start)
+    - "start": float (seconds; default 0.0; string timecodes will be converted to seconds)
+    - "end": float (seconds; default 0.0; fixed to be >= start; string timecodes converted)
     - "text": str (default "")
     - "format": str (consistent across outputs; inferred or "")
 
@@ -410,7 +410,7 @@ def align_subtitles_to_transcript(
     -------
     List[Dict]
         Cleaned and aligned list of subtitle dicts, each with keys:
-        ["index", "start", "end", "text", "format"].
+        ["index", "start", "end", "text", "format"] where "start" and "end" are seconds (float).
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -425,19 +425,40 @@ def align_subtitles_to_transcript(
         raise TypeError("transcript must be a Whisper-like dict with 'segments' or a list of segments")
 
     t_coerced: List[Dict[str, Any]] = []
+    def _maybe_timecode_to_seconds(v: Any) -> float:
+        # Accept float/int directly; if string in HH:MM:SS,mmm or HH:MM:SS.mmm, convert; else try float()
+        if isinstance(v, (int, float)):
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        if isinstance(v, str):
+            m = re.match(r"(\\d{2}):(\\d{2}):(\\d{2})[,.](\\d{3})", v.strip())
+            if m:
+                h, mi, s, ms = m.groups()
+                return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        try:
+            return float(v)  # last resort
+        except Exception:
+            return 0.0
+
     for seg in transcript_list:
         if seg is None:
             continue
         if isinstance(seg, dict):
-            text = str(seg.get("text", ""))
-            start = _safe_float(seg.get("start", 0.0))
-            end = _safe_float(seg.get("end", 0.0))
+            text = str(seg.get("text", "")) if seg.get("text") is not None else ""
+            start = _maybe_timecode_to_seconds(seg.get("start", 0.0))
+            end = _maybe_timecode_to_seconds(seg.get("end", 0.0))
         else:
             # Coerce non-dict to a text-only segment
             text = str(seg)
             start = 0.0
             end = 0.0
-        t_coerced.append({"text": text, "start": start, "end": end})
+        t_coerced.append({"text": text, "start": float(start), "end": float(end if end >= start else start)})
     t_segments = _sort_by_start(t_coerced)
 
     # ---- Normalize subtitles (fix malformed fields) ----
@@ -450,8 +471,8 @@ def align_subtitles_to_transcript(
         if not isinstance(c, dict):
             c = {"text": str(c)}
         text = str(c.get("text", "")) if c.get("text") is not None else ""
-        start = _safe_float(c.get("start", 0.0))
-        end = _safe_float(c.get("end", 0.0))
+        start = _maybe_timecode_to_seconds(c.get("start", 0.0))
+        end = _maybe_timecode_to_seconds(c.get("end", 0.0))
         index_val = c.get("index")
         try:
             index = int(index_val) if index_val is not None else idx
@@ -459,10 +480,13 @@ def align_subtitles_to_transcript(
             index = idx
         fmt = c.get("format")
         fmt = str(fmt).strip() if isinstance(fmt, str) else ""
+        # ensure non-negative and end >= start
+        if end < start:
+            end = start
         s_raw.append({
             "index": index,
-            "start": start,
-            "end": end,
+            "start": float(start),
+            "end": float(end),
             "text": text,
             "format": fmt,
         })
