@@ -13,9 +13,9 @@ transformers>=4.41.0
 requests>=2.31.0
 
 # Added for hybrid/fuzzy alignment, multilingual text correction, and improved timing
-rapidfuzz
-spacy
-language-tool-python
-sentence-transformers
-python-srt
-langid
+rapidfuzz>=3.7.0
+spacy>=3.7.4
+language-tool-python>=2.7.1
+sentence-transformers>=3.0.1
+python-srt>=3.5.2
+langid>=1.1.6

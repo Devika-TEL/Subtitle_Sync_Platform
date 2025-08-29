@@ -68,9 +68,12 @@ is a trustworthy reference.
 
 """
 
-from typing import List, Dict, Tuple, Any, Union, Optional
+from typing import List, Dict, Tuple, Any, Union, Optional, Callable
 import re
 import logging
+from math import isfinite
+
+# Optional heavy deps are imported lazily inside functions to keep import-time light for CI
 
 _PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
 _WS_RE = re.compile(r"\s+")
@@ -192,58 +195,151 @@ def _enforce_monotonic_nonoverlap(
                 _collect_adjustments.append((i + 1, old_nxt_start, old_nxt_end, _safe_float(nxt["start"]), _safe_float(nxt["end"])))
     return result
 
+def _rf_scores(a: str, b: str) -> Tuple[float, float]:
+    """Compute RapidFuzz partial_ratio and token_set_ratio in [0,1]."""
+    try:
+        from rapidfuzz import fuzz  # type: ignore
+        pr = float(fuzz.partial_ratio(a, b)) / 100.0
+        tr = float(fuzz.token_set_ratio(a, b)) / 100.0
+        return pr, tr
+    except Exception:
+        # Fallback: approximate via Jaccard to keep deterministic behavior in CI
+        at, bt = _tokens(a), _tokens(b)
+        j = _jaccard(at, bt)
+        return j, j
+
+
+def _embedding_cosine(a: str, b: str, model_loader: Optional[Callable[[], Any]]) -> float:
+    """Compute cosine similarity using sentence-transformers if available and enabled."""
+    if model_loader is None:
+        return 0.0
+    try:
+        model = model_loader()
+        from numpy import dot  # type: ignore
+        from numpy.linalg import norm  # type: ignore
+        va, vb = model.encode([a, b], convert_to_numpy=True)
+        denom = float(norm(va) * norm(vb))
+        if denom <= 0.0 or not isfinite(denom):
+            return 0.0
+        return float(dot(va, vb) / denom)
+    except Exception:
+        return 0.0
+
+
+def _hybrid_score(
+    sub_text: str,
+    span_text: str,
+    weights: Dict[str, float],
+    model_loader: Optional[Callable[[], Any]],
+) -> float:
+    """Weighted combination of RapidFuzz metrics and embedding cosine."""
+    pr, tr = _rf_scores(sub_text, span_text)
+    emb = _embedding_cosine(sub_text, span_text, model_loader)
+    return (
+        weights.get("rapidfuzz_partial", 0.4) * pr
+        + weights.get("rapidfuzz_token", 0.4) * tr
+        + weights.get("embedding", 0.2) * emb
+    )
+
+
+def _lazy_st_model_loader(model_name: str) -> Callable[[], Any]:
+    """Return a zero-arg closure that loads the sentence-transformers model once (cached)."""
+    model_ref: Dict[str, Any] = {"model": None, "name": model_name}
+
+    def _load():
+        if model_ref["model"] is None:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+
+            model_ref["model"] = SentenceTransformer(model_ref["name"])
+        return model_ref["model"]
+
+    return _load
+
+
 def _best_transcript_span_for_sub(
     sub_tokens: List[str],
     transcript: List[Dict],
     start_idx: int,
     max_span: int = 5,
     min_sim: float = 0.2,
+    *,
+    hybrid: bool = False,
+    weights: Optional[Dict[str, float]] = None,
+    model_loader: Optional[Callable[[], Any]] = None,
+    raw_sub_text: Optional[str] = None,
 ) -> Tuple[int, int, float]:
     """
     Find the best contiguous span [i, j] of transcript segments starting from start_idx within max_span
-    that maximizes Jaccard similarity to the subtitle tokens. Returns (i, j_inclusive, score).
-    If no span exceeds min_sim, returns (start_idx, start_idx, 0.0) as a fallback.
+    that maximizes similarity to the subtitle.
+    - If hybrid=False: use Jaccard over tokens (existing behavior).
+    - If hybrid=True: use weighted RapidFuzz + Embedding cosine.
+    Returns (i, j_inclusive, score). If no span exceeds min_sim, returns (start_idx, start_idx, 0.0).
     """
     best_i, best_j, best_score = start_idx, start_idx, 0.0
-    # Explore spans up to max_span
-    merged_tokens_cache = []
-    accumulated_text = ""
     for i in range(start_idx, min(len(transcript), start_idx + max_span)):
-        # reset span building from (i..)
         span_text = ""
         for j in range(i, min(len(transcript), i + max_span)):
-            # incrementally grow span text
-            if j == i:
-                span_text = str(transcript[j].get("text", ""))
+            span_text = (span_text + " " + str(transcript[j].get("text", ""))).strip() if span_text else str(
+                transcript[j].get("text", "")
+            )
+            if not hybrid:
+                span_tokens = _tokens(span_text)
+                score = _jaccard(sub_tokens, span_tokens)
             else:
-                span_text = (span_text + " " + str(transcript[j].get("text", ""))).strip()
-            span_tokens = _tokens(span_text)
-            score = _jaccard(sub_tokens, span_tokens)
+                score = _hybrid_score(raw_sub_text or " ".join(sub_tokens), span_text, weights or {}, model_loader)
             if score > best_score:
                 best_i, best_j, best_score = i, j, score
     if best_score < min_sim:
         return (start_idx, start_idx, 0.0)
     return (best_i, best_j, best_score)
 
-def _distribute_time_within_span(
-    sub_text: str, span_text: str, span_start: float, span_end: float
+def _calc_reading_duration(text: str, chars_per_sec: float, min_duration: float, max_duration: float) -> float:
+    """Estimate duration from text length with clamps."""
+    sec = max(min_duration, len(_normalize_text(text)) / max(1e-6, chars_per_sec))
+    return min(sec, max_duration)
+
+
+def _distribute_time_within_span_with_delayed_fix(
+    sub_text: str,
+    span_text: str,
+    span_start: float,
+    span_end: float,
+    *,
+    last_end: float,
+    min_gap: float,
+    min_duration: float,
+    max_duration: float,
+    chars_per_sec: float,
+    delay_threshold: float,
 ) -> Tuple[float, float]:
     """
-    Estimate a subtitle start/end within a matched transcript span,
-    proportionally to text length. If texts are comparable length,
-    use the full span; otherwise, shrink proportionally.
+    Improved timing calculation:
+    - Start at max(span_start, last_end + min_gap), unless the original offset is far after span_start
+      (delayed start), then snap closer to span_start + small pad.
+    - End based on reading speed, clamped within [start, span_end] and [min_duration, max_duration].
     """
-    s_len = max(1, len(_normalize_text(sub_text)))
-    t_len = max(1, len(_normalize_text(span_text)))
-    ratio = min(1.25, max(0.5, s_len / t_len))  # avoid extreme scaling
-    span_dur = max(0.0, span_end - span_start)
-    new_dur = span_dur * ratio
-    # center the new duration within the span
-    center = span_start + span_dur / 2.0
-    new_start = center - new_dur / 2.0
-    new_end = center + new_dur / 2.0
-    # Clamp within the span bounds
-    return (_clip(new_start, span_start, span_end), _clip(new_end, span_start, span_end))
+    span_start = float(span_start)
+    span_end = float(span_end)
+    base_start = max(span_start, last_end + min_gap)
+
+    # Detect delayed start: if base_start is significantly after span_start, snap earlier
+    if base_start - span_start > delay_threshold:
+        # pull start towards span_start but keep minimal gap after last_end
+        base_start = max(span_start + min_gap, last_end + min_gap)
+
+    # Compute duration from text
+    est_dur = _calc_reading_duration(sub_text, chars_per_sec, min_duration, max_duration)
+    est_end = min(base_start + est_dur, span_end)
+
+    # Ensure at least min_duration; if cannot extend, shift earlier within span
+    if est_end - base_start < min_duration:
+        need = (min_duration - (est_end - base_start))
+        est_end = min(span_end, base_start + min_duration)
+        if est_end - base_start < min_duration and span_end - span_start >= min_duration:
+            # try shifting start back if possible (bounded by span_start)
+            base_start = max(span_start, est_end - min_duration)
+
+    return (float(base_start), float(max(base_start + min_duration, est_end)))
 
 # PUBLIC_INTERFACE
 def align_subtitles_to_transcript(
@@ -256,6 +352,13 @@ def align_subtitles_to_transcript(
     min_gap: float = 0.02,
     verbose: bool = False,
     logger: Optional[logging.Logger] = None,
+    # Advanced alignment toggles
+    enable_hybrid: Optional[bool] = None,
+    embedding_model_name: Optional[str] = None,
+    fuzzy_weights: Optional[Dict[str, float]] = None,
+    default_chars_per_sec: Optional[float] = None,
+    max_cue_duration: Optional[float] = None,
+    delayed_start_threshold: Optional[float] = None,
 ) -> List[Dict]:
     """
     Align subtitles' start/end timings to a reference transcript as much as possible.
@@ -402,6 +505,40 @@ def align_subtitles_to_transcript(
     # Prepare logger
     _logger = _get_logger(verbose, logger)
 
+    # Config-driven advanced flags (soft dependency on config module)
+    # If caller passed explicit values, prefer them; else try reading from config Settings
+    try:
+        from .config import get_settings  # type: ignore
+
+        cfg = get_settings()
+        if enable_hybrid is None:
+            enable_hybrid = bool(getattr(cfg, "ALIGNMENT_EMBEDDINGS_ENABLED", False))
+        if embedding_model_name is None:
+            embedding_model_name = str(getattr(cfg, "ALIGNMENT_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"))
+        if fuzzy_weights is None:
+            fuzzy_weights = dict(getattr(cfg, "FUZZY_WEIGHTS", {"rapidfuzz_partial": 0.4, "rapidfuzz_token": 0.4, "embedding": 0.2}))
+        if default_chars_per_sec is None:
+            default_chars_per_sec = float(getattr(cfg, "DEFAULT_CHARS_PER_SEC", 15.0))
+        if max_cue_duration is None:
+            max_cue_duration = float(getattr(cfg, "MAX_CUE_DURATION_MS", 6000) / 1000.0)
+        if delayed_start_threshold is None:
+            delayed_start_threshold = float(getattr(cfg, "DELAY_THRESHOLD_MS", 500) / 1000.0)
+        # Ensure numbers
+        default_chars_per_sec = float(default_chars_per_sec)
+        max_cue_duration = float(max_cue_duration)
+        delayed_start_threshold = float(delayed_start_threshold)
+    except Exception:
+        # Fallback defaults if config not available
+        enable_hybrid = bool(enable_hybrid) if enable_hybrid is not None else False
+        embedding_model_name = embedding_model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        fuzzy_weights = fuzzy_weights or {"rapidfuzz_partial": 0.4, "rapidfuzz_token": 0.4, "embedding": 0.2}
+        default_chars_per_sec = float(default_chars_per_sec or 15.0)
+        max_cue_duration = float(max_cue_duration or 6.0)
+        delayed_start_threshold = float(delayed_start_threshold or 0.5)
+
+    # Set up embedding model loader if hybrid enabled
+    model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
+
     # ---- Alignment ----
     aligned: List[Dict] = []
     t_idx = 0  # monotonic pointer into transcript
@@ -418,6 +555,10 @@ def align_subtitles_to_transcript(
             start_idx=t_idx,
             max_span=max_span,
             min_sim=min_similarity,
+            hybrid=bool(enable_hybrid),
+            weights=fuzzy_weights or {"rapidfuzz_partial": 0.4, "rapidfuzz_token": 0.4, "embedding": 0.2},
+            model_loader=model_loader,
+            raw_sub_text=sub_text,
         )
 
         # Prepare the new cue dict (copy cleaned fields)
@@ -429,9 +570,19 @@ def align_subtitles_to_transcript(
             span_text = _merge_texts(span)
             span_start, span_end = _span_time(span)
 
-            # Estimate start/end within the matched span
-            est_start, est_end = _distribute_time_within_span(
-                sub_text=sub_text, span_text=span_text, span_start=span_start, span_end=span_end
+            # Estimate start/end within the matched span using improved timing with delayed start fix
+            last_end = aligned[-1]["end"] if aligned else 0.0
+            est_start, est_end = _distribute_time_within_span_with_delayed_fix(
+                sub_text=sub_text,
+                span_text=span_text,
+                span_start=span_start,
+                span_end=span_end,
+                last_end=float(last_end),
+                min_gap=float(min_gap),
+                min_duration=float(min_duration),
+                max_duration=float(max_cue_duration),
+                chars_per_sec=float(default_chars_per_sec),
+                delay_threshold=float(delayed_start_threshold),
             )
 
             # Ensure minimal duration
