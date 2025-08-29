@@ -237,26 +237,22 @@ def correct_subtitles_pipeline(
     if enable_ott_rules:
         _apply_ott_compliance_rules(working, language=language)
 
-    # 4) Audio-aware correction
-    # If a transcript is provided, use it directly to harmonize text (no ASR run).
-    # Otherwise, if enable_audio_correction is True, attempt to run ASR from audio_source.
+    # 4) Transcript-first realignment and rewrite
+    # If a transcript is provided, rebuild the cues exclusively from the transcript
+    # and disregard original subtitle timings/text. Otherwise, optionally run audio-aware corrections.
     if transcript:
         try:
-            # Enhanced transcript-aware correction:
-            # - Snap timings to best-overlapping transcript segments when mismatch exceeds threshold.
-            # - Compare subtitle cue text against transcript text and intelligently select the more plausible text.
-            # - Ensure that cue end-times do not exceed the transcript's last end timestamp.
-            _apply_transcript_timing_and_text_corrections(
-                working,
-                transcript,
-                timing_snap_threshold=0.75,  # seconds; snap when deviation is larger
-                prefer_transcript_if_score_gap=15,  # fuzzy score gap to trust transcript
-            )
-            # After transcript-based corrections, ensure all cue end times are within
-            # the actual audio duration defined by transcript. This caps overshooting cues.
-            _cap_cues_within_transcript_bounds(working, transcript)
+            rebuilt = _rebuild_cues_from_transcript(transcript, original_format=_infer_common_format(working))
+            # Optionally apply grammar/OTT to the rebuilt cues (preserving transcript wording if desired).
+            # The task requires 1:1 wording from transcript; therefore we skip grammar rewriting here
+            # and only apply light OTT wrapping if enabled to respect display constraints.
+            if enable_ott_rules:
+                _apply_ott_compliance_rules(rebuilt, language=language)
+            return rebuilt
         except Exception as tr_err:  # pragma: no cover - robustness
-            logger.warning("Transcript-aware correction failed: %s", tr_err)
+            logger.warning("Transcript-based rebuild failed: %s", tr_err)
+            # Fall back to prior behavior if rebuild fails unexpectedly
+            return working
     elif enable_audio_correction:
         try:
             _apply_audio_aware_corrections(
@@ -636,6 +632,53 @@ def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
     # sort by start
     segs.sort(key=lambda x: float(x.get("start", 0.0)))
     return segs
+
+
+def _infer_common_format(cues: List[Dict]) -> str:
+    """
+    Infer a common subtitle format ('srt' or 'vtt') from the provided cues.
+    Returns 'srt' by default if none is found.
+    """
+    for c in cues:
+        fmt = str(c.get("format", "") or "").strip().lower()
+        if fmt in {"srt", "vtt"}:
+            return fmt
+    return "srt"
+
+
+def _rebuild_cues_from_transcript(transcript: List[Dict], original_format: str = "srt") -> List[Dict]:
+    """
+    Rebuild the entire subtitle cue list strictly from the transcript segments.
+
+    Behavior:
+    - For each transcript segment, output a cue with:
+        index: sequential starting at 1
+        start: float seconds (from transcript)
+        end: float seconds (from transcript; coerced to >= start)
+        text: transcript text as-is (cleaned minimally via clean_text)
+        format: original_format (propagated for downstream formatting)
+    - Ignores any original subtitle timings or text.
+
+    Robustness:
+    - Accepts transcript as list or whisper-like dict with 'segments'.
+    - Coerces missing/invalid times to 0.0 and ensures end >= start.
+    """
+    segs = _normalize_transcript_segments(transcript)
+    cues: List[Dict] = []
+    for i, seg in enumerate(segs, start=1):
+        s = float(seg.get("start", 0.0))
+        e = float(seg.get("end", s))
+        if e < s:
+            e = s
+        t = clean_text(seg.get("text", ""))
+        cues.append({
+            "index": i,
+            "start": s,
+            "end": e,
+            "text": t,
+            "format": (original_format or "srt").strip().lower(),
+        })
+    return cues
 
 
 def _apply_audio_aware_corrections(
