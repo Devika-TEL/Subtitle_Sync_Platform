@@ -8,6 +8,7 @@ This module consolidates:
 - OTT compliance checks (line length, line count, reading speed heuristics).
 - Optional audio-aware correction using automatic speech recognition (ASR) to
   harmonize misheard words by aligning subtitle text to spoken audio.
+- Optional transcript-aware correction using a pre-generated transcript (e.g., Whisper output).
 
 The public API accepts a list of subtitle cue dictionaries (index, start, end, text, format)
 and returns a corrected list with the same structure.
@@ -79,6 +80,7 @@ def correct_subtitles_pipeline(
     audio_source: Optional[str] = None,
     asr_model_name: Optional[str] = None,
     asr_device: Optional[str] = None,
+    transcript: Optional[List[Dict]] = None,
 ) -> List[Dict]:
     """
     Central entrypoint to run the full subtitle correction pipeline.
@@ -109,6 +111,15 @@ def correct_subtitles_pipeline(
         ASR model identifier. If None, defaults will be chosen by the ASR backend.
     - asr_device: Optional[str]
         Preferred device for inference (e.g., "cpu", "cuda") if the backend supports it.
+    - transcript: Optional[List[Dict]]
+        OPTIONAL pre-generated transcript (e.g., Whisper-style segments) used to perform
+        audio-aware text harmonization without running ASR. Each segment should include:
+          - "start": float seconds
+          - "end": float seconds
+          - "text": str
+        If provided, this will be used instead of running ASR (audio_source is not required).
+        If omitted, the classic behavior applies and ASR-based correction only runs when
+        enable_audio_correction=True and audio_source is provided.
 
     Returns:
     - List[Dict]: corrected cues with the same structure as input.
@@ -118,8 +129,9 @@ def correct_subtitles_pipeline(
     2) Grammar/spell/style correction (optional).
     3) OTT compliance adjustments: line breaking rules, max lines per cue, character
        limits per line, and naive reading speed heuristics (optional).
-    4) Audio-aware correction: run ASR over the audio and reconcile with subtitle text
-       via fuzzy matching to harmonize misheard words (optional).
+    4) Audio/transcript-aware correction:
+       - If a transcript is provided, reconcile cue text with transcript text in overlapping windows.
+       - Else if ASR is enabled, run ASR and reconcile similarly.
     5) Return the corrected cues.
 
     Notes:
@@ -147,7 +159,15 @@ def correct_subtitles_pipeline(
         _apply_ott_compliance_rules(working, language=language)
 
     # 4) Audio-aware correction
-    if enable_audio_correction:
+    # If a transcript is provided, use it directly to harmonize text (no ASR run).
+    # Otherwise, if enable_audio_correction is True, attempt to run ASR from audio_source.
+    if transcript:
+        try:
+            # TRANSCRIPT USAGE: This path uses the externally provided transcript for cue-wise text correction.
+            _apply_transcript_aware_corrections(working, transcript)
+        except Exception as tr_err:  # pragma: no cover - robustness
+            logger.warning("Transcript-aware correction failed: %s", tr_err)
+    elif enable_audio_correction:
         try:
             _apply_audio_aware_corrections(
                 working,
@@ -284,7 +304,7 @@ def _apply_ott_compliance_rules(
         wrapped = _wrap_text(joined, max_chars_per_line, max_lines_per_cue)
 
         # Optionally enforce terminal punctuation (avoid adding punctuation to obvious non-sentences)
-        if enforce_terminal_punctuation and not re.search(r"[.!?…]$", wrapped[-1]):
+        if enforce_terminal_punctuation and not re.search(r"[.!?\u2026]$", wrapped[-1]):
             # Only add period if the last token looks alphabetic (rudimentary)
             if re.search(r"[A-Za-z]$", wrapped[-1]):
                 wrapped[-1] = wrapped[-1] + "."
@@ -367,8 +387,82 @@ def _adjust_for_reading_speed(text: str) -> str:
 
 
 # ------------------------
-# Helpers: Audio-Aware Correction (ASR)
+# Helpers: Audio/Transcript-Aware Correction
 # ------------------------
+
+def _apply_transcript_aware_corrections(
+    cues: List[Dict],
+    transcript: List[Dict],
+) -> None:
+    """
+    Use a provided transcript to harmonize each cue's text.
+
+    TRANSCRIPT USAGE DETAILS:
+    - We do NOT run ASR here. Instead, we map each subtitle cue's timing window to
+      any overlapping transcript segments and build a 'reference' text for that window.
+    - Then we pass the cue text and reference text to the same harmonization routine
+      used by ASR-based correction (_harmonize_text_with_asr), which performs conservative
+      token-level replacements guided by fuzzy matching (rapidfuzz if available).
+    """
+    # Normalize transcript to a list of dicts with start/end/text
+    segments = _normalize_transcript_segments(transcript)
+
+    if not segments:
+        logger.debug("Transcript is empty or malformed; skipping transcript-aware corrections.")
+        return
+
+    for c in cues:
+        start_s = _timestamp_to_seconds(c.get("start", "00:00:00,000"))
+        end_s = _timestamp_to_seconds(c.get("end", "00:00:00,000"))
+        ref_text = _collect_asr_text_for_window(segments, start_s, end_s)
+        if not ref_text.strip():
+            continue
+
+        original_text = c.get("text", "").strip()
+        if not original_text:
+            continue
+
+        harmonized = _harmonize_text_with_asr(original_text, ref_text)
+        if _is_change_reasonable(original_text, harmonized):
+            c["text"] = harmonized
+
+
+def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
+    """
+    Normalize a transcript object into a flat list[{'start': float, 'end': float, 'text': str}].
+    Accepts either:
+    - List[Dict] directly
+    - Dict with 'segments': List[Dict]
+    Non-dict entries are coerced to text with zero times.
+    """
+    segs: List[Dict] = []
+    # If a dict-like whisper result slipped through, accept it
+    if isinstance(transcript, dict):  # type: ignore
+        raw = transcript.get("segments") if hasattr(transcript, "get") else None  # type: ignore
+        if isinstance(raw, list):
+            transcript = raw  # type: ignore
+
+    if not isinstance(transcript, list):  # type: ignore
+        return segs
+
+    for item in transcript:  # type: ignore
+        if isinstance(item, dict):
+            try:
+                s = float(item.get("start", 0.0))
+            except Exception:
+                s = 0.0
+            try:
+                e = float(item.get("end", 0.0))
+            except Exception:
+                e = s
+            t = str(item.get("text", "")).strip()
+            segs.append({"start": s, "end": e if e >= s else s, "text": t})
+        else:
+            segs.append({"start": 0.0, "end": 0.0, "text": str(item).strip()})
+    # sort by start
+    segs.sort(key=lambda x: float(x.get("start", 0.0)))
+    return segs
+
 
 def _apply_audio_aware_corrections(
     cues: List[Dict],
@@ -571,7 +665,10 @@ def _detokenize(tokens: List[str]) -> str:
         if re.match(r"[,.!?;:)\]\}]", t):
             # punctuation that should not have a leading space
             out += t
-        elif re.match(r"[(\[\{]", t):
+        elif re.match(r"([\-\u2014])", t):
+            # em-dash/dash attach to previous
+            out += t
+        elif re.match(r"([\(\[\{])", t):
             # opening punctuation should have a space before it
             out += " " + t
         else:
