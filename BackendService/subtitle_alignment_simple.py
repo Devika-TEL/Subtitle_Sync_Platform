@@ -68,8 +68,9 @@ is a trustworthy reference.
 
 """
 
-from typing import List, Dict, Tuple, Any, Union
+from typing import List, Dict, Tuple, Any, Union, Optional
 import re
+import logging
 
 _PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
 _WS_RE = re.compile(r"\s+")
@@ -132,32 +133,63 @@ def _span_time(items: List[Dict]) -> Tuple[float, float]:
 def _clip(val: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, val))
 
-def _enforce_monotonic_nonoverlap(subs: List[Dict], min_gap: float = 0.02, min_dur: float = 0.2) -> List[Dict]:
+def _get_logger(verbose: bool, logger: Optional[logging.Logger]) -> Optional[logging.Logger]:
+    """
+    Returns a logger based on provided arguments.
+    If logger is None and verbose is True, configures a default logger at INFO level.
+    If verbose is False and logger is None, returns None (no logging).
+    """
+    if logger is not None:
+        return logger
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+        return logging.getLogger(__name__)
+    return None
+
+def _enforce_monotonic_nonoverlap(
+    subs: List[Dict],
+    min_gap: float = 0.02,
+    min_dur: float = 0.2,
+    *,
+    _collect_adjustments: Optional[List[Tuple[int, float, float, float, float]]] = None,
+) -> List[Dict]:
     """
     Make sure subtitle timings are monotonic and non-overlapping.
     - Ensures start[i] >= end[i-1] + min_gap
     - Ensures duration >= min_dur (expanding end if necessary within observed bounds)
+
+    If _collect_adjustments is provided, it is appended with tuples:
+        (cue_idx_sorted, old_start, old_end, new_start, new_end)
+    for cues whose times changed by this enforcement step.
     """
     result = _sort_by_start(subs)
     # First pass: enforce monotonic starts and min duration
     for i, s in enumerate(result):
-        start = _safe_float(s.get("start", 0.0))
-        end = _safe_float(s.get("end", 0.0))
+        old_start = _safe_float(s.get("start", 0.0))
+        old_end = _safe_float(s.get("end", 0.0))
+        start = old_start
+        end = old_end
         if i > 0:
             prev_end = _safe_float(result[i - 1].get("end", 0.0))
             start = max(start, prev_end + min_gap)
         if end <= start + min_dur:
             end = start + min_dur
-        s["start"], s["end"] = start, max(end, start)
-    # Second pass: ensure next starts after current with min gap; if needed, shrink current slightly
+        start, end = start, max(end, start)
+        s["start"], s["end"] = start, end
+        if _collect_adjustments is not None and (start != old_start or end != old_end):
+            _collect_adjustments.append((i, old_start, old_end, start, end))
+    # Second pass: ensure next starts after current with min gap; if needed, extend next
     for i in range(len(result) - 1):
         cur = result[i]
         nxt = result[i + 1]
+        old_nxt_start = _safe_float(nxt.get("start", 0.0))
+        old_nxt_end = _safe_float(nxt.get("end", 0.0))
         if _safe_float(nxt["start"]) < _safe_float(cur["end"]) + min_gap:
-            # push next start forward if needed
             nxt["start"] = _safe_float(cur["end"]) + min_gap
             if _safe_float(nxt["end"]) < _safe_float(nxt["start"]) + min_dur:
                 nxt["end"] = _safe_float(nxt["start"]) + min_dur
+            if _collect_adjustments is not None and (nxt["start"] != old_nxt_start or nxt["end"] != old_nxt_end):
+                _collect_adjustments.append((i + 1, old_nxt_start, old_nxt_end, _safe_float(nxt["start"]), _safe_float(nxt["end"])))
     return result
 
 def _best_transcript_span_for_sub(
@@ -222,6 +254,8 @@ def align_subtitles_to_transcript(
     min_similarity: float = 0.2,
     min_duration: float = 0.4,
     min_gap: float = 0.02,
+    verbose: bool = False,
+    logger: Optional[logging.Logger] = None,
 ) -> List[Dict]:
     """
     Align subtitles' start/end timings to a reference transcript as much as possible.
@@ -273,6 +307,11 @@ def align_subtitles_to_transcript(
         Minimum duration for any subtitle (seconds).
     min_gap : float, optional
         Minimum gap enforced between consecutive subtitles (seconds).
+    verbose : bool, optional
+        If True, emits info logs for each cue when timings change due to alignment or non-overlap enforcement.
+    logger : logging.Logger or None, optional
+        Logger to use for logging. If None and verbose is True, a default logger is configured at INFO level.
+        If verbose is False and logger is None, no logs are emitted.
 
     Returns
     -------
@@ -360,13 +399,18 @@ def align_subtitles_to_transcript(
             })
         return normalized
 
+    # Prepare logger
+    _logger = _get_logger(verbose, logger)
+
     # ---- Alignment ----
     aligned: List[Dict] = []
     t_idx = 0  # monotonic pointer into transcript
 
-    for cue in s_cues:
+    for cue_idx, cue in enumerate(s_cues):
         sub_text = str(cue.get("text", ""))
         sub_tokens = _tokens(sub_text)
+        orig_start = _safe_float(cue.get("start", 0.0))
+        orig_end = _safe_float(cue.get("end", 0.0))
         # Find best span in transcript starting from t_idx
         i, j, score = _best_transcript_span_for_sub(
             sub_tokens=sub_tokens,
@@ -378,6 +422,7 @@ def align_subtitles_to_transcript(
 
         # Prepare the new cue dict (copy cleaned fields)
         new_cue = dict(cue)
+        chosen_span_info = None
 
         if score >= min_similarity:
             span = t_segments[i : j + 1]
@@ -402,6 +447,14 @@ def align_subtitles_to_transcript(
             new_cue["start"] = float(est_start)
             new_cue["end"] = float(est_end)
 
+            chosen_span_info = {
+                "span_i": i,
+                "span_j": j,
+                "span_start": float(span_start),
+                "span_end": float(span_end),
+                "similarity": float(score),
+            }
+
             # Advance transcript pointer past j, but don't skip too aggressively
             t_idx = max(t_idx, j)
         else:
@@ -412,11 +465,49 @@ def align_subtitles_to_transcript(
                 end_o = start_o + min_duration
             new_cue["start"] = float(start_o)
             new_cue["end"] = float(end_o)
+            chosen_span_info = {
+                "span_i": i,
+                "span_j": j,
+                "span_start": float(t_segments[i].get("start", 0.0)) if 0 <= i < len(t_segments) else 0.0,
+                "span_end": float(t_segments[j].get("end", 0.0)) if 0 <= j < len(t_segments) else 0.0,
+                "similarity": float(score),
+            }
+
+        # Log if alignment adjusted times
+        if _logger is not None and (new_cue["start"] != orig_start or new_cue["end"] != orig_end):
+            _logger.info(
+                "Alignment change | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f | sim=%0.3f | span=(%d..%d) [%0.3f..%0.3f]",
+                cue_idx,
+                orig_start,
+                orig_end,
+                new_cue["start"],
+                new_cue["end"],
+                chosen_span_info.get("similarity", 0.0) if chosen_span_info else 0.0,
+                chosen_span_info.get("span_i", -1) if chosen_span_info else -1,
+                chosen_span_info.get("span_j", -1) if chosen_span_info else -1,
+                chosen_span_info.get("span_start", 0.0) if chosen_span_info else 0.0,
+                chosen_span_info.get("span_end", 0.0) if chosen_span_info else 0.0,
+            )
 
         aligned.append(new_cue)
 
     # Final non-overlap enforcement and minimal gap/duration
-    aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
+    nonoverlap_adjustments: List[Tuple[int, float, float, float, float]] = []
+    aligned = _enforce_monotonic_nonoverlap(
+        aligned, min_gap=min_gap, min_dur=min_duration, _collect_adjustments=nonoverlap_adjustments
+    )
+
+    # Emit logs for non-overlap adjustments
+    if _logger is not None:
+        for (cidx, old_s, old_e, new_s, new_e) in nonoverlap_adjustments:
+            _logger.info(
+                "Non-overlap adjust | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f",
+                cidx,
+                old_s,
+                old_e,
+                new_s,
+                new_e,
+            )
 
     # ---- Output cleaning: enforce required keys and consistent format ----
     normalized: List[Dict] = []
@@ -447,6 +538,6 @@ if __name__ == "__main__":
         {"text": "hello world", "start": 0.4, "end": 1.6},
         {"text": "this is demo", "start": 2.1, "end": 3.5},
     ]
-    out = align_subtitles_to_transcript(demo_transcript, demo_subs)
+    out = align_subtitles_to_transcript(demo_transcript, demo_subs, verbose=True)
     for i, c in enumerate(out, 1):
         print(f"{i}\n{c['start']:.2f} --> {c['end']:.2f}\n{c['text']}\n")
