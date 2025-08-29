@@ -44,6 +44,38 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 - For the standalone subtitle generation script (standalone_subtitle_generation.py), translations are performed using Google Gemini when the target language differs from the detected language. You must set GEMINI_API_KEY in your environment or .env for translation to work. Example .env:
   GEMINI_API_KEY=your_api_key_here
 
+### Alignment modes and configuration
+
+The alignment utility supports two modes:
+- Simple (default): fast, no heavy dependencies. Uses token Jaccard similarity.
+- Advanced (hybrid): combines RapidFuzz and sentence-transformers semantic similarity, with robust timing correction.
+
+Toggles are read from env via config.py or can be passed directly to the function:
+- ALIGNMENT_EMBEDDINGS_ENABLED=true|false
+- ALIGNMENT_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+- FUZZY_W_PARTIAL=0.4
+- FUZZY_W_TOKEN=0.4
+- FUZZY_W_EMB=0.2
+- DEFAULT_CHARS_PER_SEC=15
+- MAX_CUE_DURATION_MS=6000
+- DELAY_THRESHOLD_MS=500
+
+Programmatic usage:
+```python
+from Subtitle_Sync_Platform.BackendService.subtitle_alignment_simple import align_subtitles_to_transcript
+
+aligned = align_subtitles_to_transcript(
+    transcript_segments,
+    subtitle_cues,
+    enable_hybrid=True,  # or set env ALIGNMENT_EMBEDDINGS_ENABLED=1
+    embedding_model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    fuzzy_weights={"rapidfuzz_partial":0.4,"rapidfuzz_token":0.4,"embedding":0.2},
+    default_chars_per_sec=15.0,
+    max_cue_duration=6.0,
+    delayed_start_threshold=0.5,
+)
+```
+
 ## Programmatic API: Reposition Subtitles to Avoid Hardcoded Text
 
 A new utility entry point is available for developers who want to programmatically reposition subtitles to avoid overlap with burnt-in (hardcoded) text:

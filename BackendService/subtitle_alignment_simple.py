@@ -2,32 +2,41 @@
 Subtitle alignment utility (pure Python, no web framework).
 
 This module provides a single public function `align_subtitles_to_transcript` that realigns a list of subtitle
-cues to a given reference transcript with timestamps. The alignment uses a lightweight, structure-first approach:
-- Tokenizes and normalizes text for robust matching
-- Performs greedy, monotonic alignment between transcript segments and subtitle cues
-- Adjusts subtitle start/end times based on matched transcript time ranges
-- Preserves relative intra-cue duration and clamps to valid ranges
-- Resolves overlaps and enforces minimal gaps and durations
+cues to a given reference transcript with timestamps.
 
-This is intended for direct use from scripts or REPL sessions. It does not depend on any
-web framework or external libraries.
+New (advanced mode) features:
+- Hybrid similarity for cue-to-transcript matching:
+  - RapidFuzz character/token fuzz (partial_ratio + token_set_ratio)
+  - Optional semantic similarity using sentence-transformers embeddings (cosine)
+  - Weighted fusion for robust ranking across paraphrases and noisy text
+- Robust timing correction:
+  - Detects delayed/inaccurate starts and snaps towards the matched transcript span start with safety gap
+  - Reading-speed-based duration with clamping (min/max) and span boundary respect
+  - Final pass to enforce non-overlap, minimal gaps, and durations
+
+Simple mode (default):
+- Keeps legacy lightweight Jaccard token overlap and heuristic timing as a fast path with zero heavy dependencies.
+
+Configuration/toggles (read from config.py if available or via function args):
+- enable_hybrid (ALIGNMENT_EMBEDDINGS_ENABLED)
+- embedding_model_name (ALIGNMENT_MODEL_NAME)
+- fuzzy_weights (FUZZY_W_PARTIAL / FUZZY_W_TOKEN / FUZZY_W_EMB via config)
+- default_chars_per_sec (DEFAULT_CHARS_PER_SEC)
+- max_cue_duration (MAX_CUE_DURATION_MS)
+- delayed_start_threshold (DELAY_THRESHOLD_MS)
 
 Data contracts (updated):
 - transcript: Whisper transcribe() output or a flat list:
-    - If dict: expects a "segments" list. Each segment should include:
-        - "text": str
-        - "start": float (seconds)
-        - "end": float (seconds)
-      We'll normalize into a List[dict] of segments.
-    - If list: same segment structure as above. Non-dict items are coerced to text-only with 0.0 times.
+    - If dict: expects a "segments" list with "text", "start", "end"
+    - If list: same structure; non-dict coerced to text-only with 0.0 times
 - subtitles: List[dict] of cues with keys:
     - "index": int (sequence; auto-filled if missing)
     - "start": float (seconds; default 0.0)
     - "end": float (seconds; default 0.0; fixed to be >= start)
     - "text": str (default "")
-    - "format": str (consistent across outputs; inferred from first non-empty input format or "")
+    - "format": str (consistent across outputs; inferred or "")
 
-Both lists are sorted by start time internally if not already ordered.
+Both lists are sorted by start time internally.
 
 Example
 -------
@@ -40,32 +49,13 @@ Example
 ...   {"text": "Hello world", "start": 0.5, "end": 2.0},
 ...   {"text": "This is demo", "start": 2.2, "end": 4.2},
 ... ]
->>> aligned = align_subtitles_to_transcript(transcript, subs)
+>>> aligned = align_subtitles_to_transcript(transcript, subs, enable_hybrid=True)
 >>> aligned[0]["start"], aligned[0]["end"]  # approximately matches 0.0..1.2
 (0.0, 1.2)
->>> aligned[1]["start"] >= 1.3 and aligned[1]["end"] <= 4.0
-True
-
-Design notes
-------------
-- Matching strategy:
-  We normalize text (lowercase, strip punctuation/extra whitespace), then compute simple similarity via
-  token-overlap Jaccard. For each subtitle, we search forward in transcript segments (monotonic constraint)
-  and greedily merge one or more consecutive transcript segments to get the best similarity above a threshold.
-- Timing strategy:
-  If we matched a span in the transcript, we adopt the span timings, scaled by the proportion of subtitle text
-  length relative to span text length to approximate duration distribution. If scaling is uncertain, we use the
-  span bounds directly.
-- Safety and cleanup:
-  We enforce minimum duration and clamp within neighbor bounds to prevent overlaps, then apply a final overlap
-  resolution pass to ensure non-decreasing start times and minimal gaps.
 
 Limitations
 -----------
-This is a heuristic approach. For high-accuracy alignment, consider forced alignment on audio (e.g., WhisperX),
-or word-level timestamps from ASR. This function is suitable for improving mismatched captions when the transcript
-is a trustworthy reference.
-
+Heuristic approach. For highest accuracy, consider word-level timestamps (e.g., WhisperX).
 """
 
 from typing import List, Dict, Tuple, Any, Union, Optional, Callable
