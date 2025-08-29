@@ -33,8 +33,9 @@ NOTE: This module does not install dependencies, read files, or manage the .env 
 Author: BackendService
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import logging
+import math
 import re
 
 # Optional imports guarded within try/except so module remains importable even if not installed.
@@ -67,6 +68,49 @@ except Exception:  # pragma: no cover - optional
 
 
 logger = logging.getLogger(__name__)
+
+def _is_nan_value(value: Any) -> bool:
+    """
+    Internal helper to detect NaN values across types safely.
+    """
+    try:
+        # math.isnan only accepts float-like; guard with try
+        return isinstance(value, float) and math.isnan(value)
+    except Exception:
+        return False
+
+# PUBLIC_INTERFACE
+def clean_text(value: Any) -> str:
+    """
+    Safely normalize any input value into a string for downstream text handling.
+
+    Behavior:
+    - None -> ""
+    - NaN (float('nan')) -> ""
+    - ints/floats -> "" (we avoid stringifying numeric noise into "123")
+    - other types -> str(value).strip()
+    Always returns a string, never None.
+
+    Notes:
+    - This is used throughout the pipeline before any string operation (.strip, splitlines, regex).
+    - Helps robustness when upstream records contain malformed or typed text fields.
+    """
+    try:
+        if value is None:
+            return ""
+        if _is_nan_value(value):
+            return ""
+        # If explicit numeric types: treat as empty to avoid polluting text
+        if isinstance(value, (int, float)):
+            return ""
+        # Strings or other objects
+        return str(value).strip()
+    except Exception as e:  # pragma: no cover - ultra defensive
+        logger.debug("clean_text: failed to coerce value=%r due to %s", value, e)
+        try:
+            return ("" if value is None else str(value)).strip()
+        except Exception:
+            return ""
 
 
 # PUBLIC_INTERFACE
@@ -139,6 +183,8 @@ def correct_subtitles_pipeline(
       step is skipped and a debug log is emitted. The function remains safe to call.
     - OTT compliance rules here are heuristic baselines and may be adapted to the
       organization’s standards.
+    - Robust text handling: All cue/transcript text values are normalized via clean_text,
+      supporting None/NaN/numeric inputs safely.
     """
     if not isinstance(cues, list):
         raise ValueError("cues must be a list of subtitle cue dictionaries")
@@ -148,7 +194,12 @@ def correct_subtitles_pipeline(
 
     # 1) Basic normalization
     for c in working:
-        c["text"] = _normalize_text(c.get("text", ""))
+        raw_text = c.get("text", "")
+        safe_text = clean_text(raw_text)
+        if raw_text is None or _is_nan_value(raw_text) or isinstance(raw_text, (int, float)):
+            logger.debug("correct_subtitles_pipeline: normalized non-string cue text for index=%s value=%r",
+                         c.get("index"), raw_text)
+        c["text"] = _normalize_text(safe_text)
 
     # 2) Grammar/Spell
     if enable_grammar:
@@ -186,12 +237,13 @@ def correct_subtitles_pipeline(
 # Helpers: Text Normalization
 # ------------------------
 
-def _normalize_text(text: str) -> str:
+def _normalize_text(text: Any) -> str:
     """
     Normalize whitespace, trim extra spaces, and standardize punctuation spacing.
-    Avoid altering content semantics.
+    Avoid altering content semantics. Accepts any input type and normalizes via clean_text.
     """
-    if not text:
+    t = clean_text(text)
+    if not t:
         return ""
 
     # Replace multiple spaces/tabs with a single space
@@ -232,8 +284,8 @@ def _apply_grammar_and_spell_corrections(cues: List[Dict], language: str = "en")
             return
 
     for c in cues:
-        text_before = c.get("text", "")
-        if not text_before.strip():
+        text_before = clean_text(c.get("text", ""))
+        if not text_before:
             continue
         try:
             corrected = tool.correct(text_before)
@@ -290,12 +342,12 @@ def _apply_ott_compliance_rules(
     Note: In practice, standards vary by platform and region. Adjust thresholds accordingly.
     """
     for c in cues:
-        text = c.get("text", "").strip()
+        text = clean_text(c.get("text", ""))
         if not text:
             continue
 
         # Split into natural lines if present; otherwise treat as single text block.
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        lines = [clean_text(ln) for ln in text.splitlines() if clean_text(ln)]
         if not lines:
             lines = [text]
 
@@ -314,7 +366,7 @@ def _apply_ott_compliance_rules(
     # Optional reading speed check; if too dense, attempt further splitting
     if textstat is not None:
         for c in cues:
-            c["text"] = _adjust_for_reading_speed(c["text"])
+            c["text"] = _adjust_for_reading_speed(clean_text(c.get("text", "")))
 
 
 def _wrap_text(text: str, max_chars: int, max_lines: int) -> List[str]:
@@ -415,10 +467,10 @@ def _apply_transcript_aware_corrections(
         start_s = _timestamp_to_seconds(c.get("start", "00:00:00,000"))
         end_s = _timestamp_to_seconds(c.get("end", "00:00:00,000"))
         ref_text = _collect_asr_text_for_window(segments, start_s, end_s)
-        if not ref_text.strip():
+        if not clean_text(ref_text):
             continue
 
-        original_text = c.get("text", "").strip()
+        original_text = clean_text(c.get("text", ""))
         if not original_text:
             continue
 
@@ -433,7 +485,9 @@ def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
     Accepts either:
     - List[Dict] directly
     - Dict with 'segments': List[Dict]
-    Non-dict entries are coerced to text with zero times.
+    Robust handling:
+    - 'text' values that are None/NaN/numeric are converted to "" using clean_text.
+    - Non-dict entries are coerced to text (via clean_text) with zero times.
     """
     segs: List[Dict] = []
     # If a dict-like whisper result slipped through, accept it
@@ -455,10 +509,10 @@ def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
                 e = float(item.get("end", 0.0))
             except Exception:
                 e = s
-            t = str(item.get("text", "")).strip()
+            t = clean_text(item.get("text", ""))
             segs.append({"start": s, "end": e if e >= s else s, "text": t})
         else:
-            segs.append({"start": 0.0, "end": 0.0, "text": str(item).strip()})
+            segs.append({"start": 0.0, "end": 0.0, "text": clean_text(item)})
     # sort by start
     segs.sort(key=lambda x: float(x.get("start", 0.0)))
     return segs
@@ -502,10 +556,10 @@ def _apply_audio_aware_corrections(
         start_s = _timestamp_to_seconds(c.get("start", "00:00:00,000"))
         end_s = _timestamp_to_seconds(c.get("end", "00:00:00,000"))
         cue_asr_text = _collect_asr_text_for_window(segments, start_s, end_s)
-        if not cue_asr_text.strip():
+        if not clean_text(cue_asr_text):
             continue
 
-        original_text = c.get("text", "").strip()
+        original_text = clean_text(c.get("text", ""))
         if not original_text:
             continue
 
@@ -537,7 +591,7 @@ def _run_asr(
             segments_out = []
             # Transcribe generator yields Segment(start, end, text)
             for seg in model.transcribe(audio_source, language=language, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))[0]:
-                segments_out.append({"start": float(seg.start), "end": float(seg.end), "text": seg.text.strip()})
+                segments_out.append({"start": float(seg.start), "end": float(seg.end), "text": clean_text(seg.text)})
             return segments_out
         except Exception as e:  # pragma: no cover - robustness
             logger.debug("faster-whisper ASR failed: %s", e)
@@ -552,7 +606,7 @@ def _run_asr(
                 segments_out.append({
                     "start": float(seg.get("start", 0.0)),
                     "end": float(seg.get("end", 0.0)),
-                    "text": str(seg.get("text", "")).strip(),
+                    "text": clean_text(seg.get("text", "")),
                 })
             return segments_out
         except Exception as e:  # pragma: no cover - robustness
@@ -570,7 +624,7 @@ def _collect_asr_text_for_window(segments: List[Dict], start: float, end: float)
     for seg in segments:
         s, e = seg.get("start", 0.0), seg.get("end", 0.0)
         if _overlaps(start, end, s, e):
-            t = seg.get("text", "").strip()
+            t = clean_text(seg.get("text", ""))
             if t:
                 collected.append(t)
     return " ".join(collected)
@@ -594,7 +648,7 @@ def _timestamp_to_seconds(ts: str) -> float:
     return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
 
 
-def _harmonize_text_with_asr(sub_text: str, asr_text: str) -> str:
+def _harmonize_text_with_asr(sub_text: Any, asr_text: Any) -> str:
     """
     Attempt to harmonize subtitle text with ASR text using token-level fuzzy matching.
     - Keeps the structure (line breaks) of the subtitle text.
@@ -602,8 +656,10 @@ def _harmonize_text_with_asr(sub_text: str, asr_text: str) -> str:
     """
 
     # Split subtitle by lines to preserve layout
-    sub_lines = sub_text.splitlines()
-    asr_tokens = _tokenize(asr_text)
+    sub_text_s = clean_text(sub_text)
+    asr_text_s = clean_text(asr_text)
+    sub_lines = sub_text_s.splitlines()
+    asr_tokens = _tokenize(asr_text_s)
 
     # If rapidfuzz unavailable, fallback to very conservative replacement using simple equality/near match.
     use_fuzzy = fuzz is not None
@@ -645,12 +701,16 @@ def _harmonize_text_with_asr(sub_text: str, asr_text: str) -> str:
     return "\n".join(harmonized_lines).strip()
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: Any) -> List[str]:
     """
     Tokenize text into words and punctuation tokens while preserving punctuation as separate tokens.
+    Accepts any input type and normalizes via clean_text.
     """
     # Split on word boundaries but keep punctuation
-    return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
+    safe = clean_text(text)
+    if not safe:
+        return []
+    return re.findall(r"\w+|[^\w\s]", safe, re.UNICODE)
 
 
 def _detokenize(tokens: List[str]) -> str:
