@@ -11,3 +11,11 @@ torch>=2.0.0
 numpy>=1.24.0
 transformers>=4.41.0
 requests>=2.31.0
+
+# Added for hybrid/fuzzy alignment, multilingual text correction, and improved timing
+rapidfuzz
+spacy
+language-tool-python
+sentence-transformers
+python-srt
+langid
