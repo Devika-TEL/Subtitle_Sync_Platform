@@ -214,8 +214,15 @@ def correct_subtitles_pipeline(
     # Otherwise, if enable_audio_correction is True, attempt to run ASR from audio_source.
     if transcript:
         try:
-            # TRANSCRIPT USAGE: This path uses the externally provided transcript for cue-wise text correction.
-            _apply_transcript_aware_corrections(working, transcript)
+            # Enhanced transcript-aware correction:
+            # - Snap timings to best-overlapping transcript segments when mismatch exceeds threshold.
+            # - Compare subtitle cue text against transcript text and intelligently select the more plausible text.
+            _apply_transcript_timing_and_text_corrections(
+                working,
+                transcript,
+                timing_snap_threshold=0.75,  # seconds; snap when deviation is larger
+                prefer_transcript_if_score_gap=15,  # fuzzy score gap to trust transcript
+            )
         except Exception as tr_err:  # pragma: no cover - robustness
             logger.warning("Transcript-aware correction failed: %s", tr_err)
     elif enable_audio_correction:
@@ -247,7 +254,7 @@ def _normalize_text(text: Any) -> str:
         return ""
 
     # Replace multiple spaces/tabs with a single space
-    t = re.sub(r"[ \t]+", " ", text)
+    t = re.sub(r"[ \t]+", " ", t)
 
     # Normalize spaces around punctuation (simple heuristics)
     t = re.sub(r"\s+([,.!?;:])", r"\1", t)      # remove space before punctuation
@@ -442,41 +449,157 @@ def _adjust_for_reading_speed(text: str) -> str:
 # Helpers: Audio/Transcript-Aware Correction
 # ------------------------
 
-def _apply_transcript_aware_corrections(
+def _apply_transcript_timing_and_text_corrections(
     cues: List[Dict],
     transcript: List[Dict],
+    *,
+    timing_snap_threshold: float = 0.75,
+    prefer_transcript_if_score_gap: int = 15,
 ) -> None:
     """
-    Use a provided transcript to harmonize each cue's text.
+    Using a provided transcript (segments with start/end/text), adjust each cue:
+    1) Identify overlapping/best-matching transcript segment span.
+    2) If timing mismatch is above threshold, snap cue start/end to transcript span.
+    3) If subtitle text differs significantly from transcript text, decide which to keep based on:
+       - Fuzzy similarity scores (RapidFuzz if available).
+       - Length/word plausibility heuristics.
+       - Trust transcript when it strongly matches audio proxy (use overlap+score as proxy).
+    Mutates cues in-place and preserves the input dict schema (index,start,end,text,format).
 
-    TRANSCRIPT USAGE DETAILS:
-    - We do NOT run ASR here. Instead, we map each subtitle cue's timing window to
-      any overlapping transcript segments and build a 'reference' text for that window.
-    - Then we pass the cue text and reference text to the same harmonization routine
-      used by ASR-based correction (_harmonize_text_with_asr), which performs conservative
-      token-level replacements guided by fuzzy matching (rapidfuzz if available).
+    Parameters:
+    - timing_snap_threshold: seconds difference required to trigger snapping.
+    - prefer_transcript_if_score_gap: minimum score gap (0-100) between transcript-vs-subtitle similarities
+      to choose transcript text.
     """
-    # Normalize transcript to a list of dicts with start/end/text
     segments = _normalize_transcript_segments(transcript)
-
     if not segments:
         logger.debug("Transcript is empty or malformed; skipping transcript-aware corrections.")
         return
 
+    # Precompute transcript texts for quick span concatenation
     for c in cues:
+        # Parse cue times
         start_s = _timestamp_to_seconds(c.get("start", "00:00:00,000"))
         end_s = _timestamp_to_seconds(c.get("end", "00:00:00,000"))
-        ref_text = _collect_asr_text_for_window(segments, start_s, end_s)
-        if not clean_text(ref_text):
-            continue
+        if end_s < start_s:
+            end_s = start_s
 
-        original_text = clean_text(c.get("text", ""))
-        if not original_text:
-            continue
+        sub_text = clean_text(c.get("text", ""))
+        # 1) find overlapping segments; if none, choose nearest segment by center distance
+        overlapping = []
+        for seg in segments:
+            s, e = float(seg.get("start", 0.0)), float(seg.get("end", 0.0))
+            if _overlaps(start_s, end_s, s, e):
+                overlapping.append(seg)
 
-        harmonized = _harmonize_text_with_asr(original_text, ref_text)
-        if _is_change_reasonable(original_text, harmonized):
-            c["text"] = harmonized
+        if not overlapping:
+            # Choose nearest segment by center distance
+            cue_center = (start_s + end_s) / 2.0
+            nearest = min(segments, key=lambda sg: abs(((float(sg.get("start", 0.0)) + float(sg.get("end", 0.0))) / 2.0) - cue_center))
+            overlapping = [nearest]
+
+        # Build span text and span time from the overlapping (may include multiple consecutive segments)
+        span_start = float(overlapping[0].get("start", 0.0))
+        span_end = float(overlapping[-1].get("end", 0.0))
+        span_text = " ".join(clean_text(seg.get("text", "")) for seg in overlapping if clean_text(seg.get("text", "")))
+
+        # 2) Snap timings if mismatch exceeds threshold
+        def _delta(a: float, b: float) -> float:
+            return abs(float(a) - float(b))
+
+        new_start, new_end = start_s, end_s
+        if _delta(start_s, span_start) > timing_snap_threshold or _delta(end_s, span_end) > timing_snap_threshold:
+            new_start, new_end = span_start, span_end
+
+        # 3) Decide on text
+        # Calculate fuzzy similarities using RapidFuzz if available, else simple heuristic
+        def _fuzzy_ratio(a: str, b: str) -> int:
+            if not a and not b:
+                return 100
+            if not a or not b:
+                return 0
+            if fuzz is None:
+                # Approximate via token overlap ratio scaled to 100
+                at = set(_tokenize(a.lower()))
+                bt = set(_tokenize(b.lower()))
+                inter = len(at & bt)
+                union = len(at | bt) or 1
+                return int(round(100.0 * inter / union))
+            try:
+                return int(fuzz.token_set_ratio(a, b))
+            except Exception:
+                try:
+                    return int(fuzz.ratio(a, b))
+                except Exception:
+                    return 0
+
+        # Scores:
+        # - How well subtitle matches span text
+        # - How well transcript span text self-consistency (always high), and baseline heuristics
+        sub_vs_span = _fuzzy_ratio(sub_text, span_text)
+        # trust signal: overlap duration as fraction of cue/ span; more overlap => more trust in transcript times/text
+        overlap_duration = max(0.0, min(end_s, span_end) - max(start_s, span_start))
+        cue_duration = max(0.01, end_s - start_s)
+        span_duration = max(0.01, span_end - span_start)
+        overlap_ratio = max(overlap_duration / cue_duration, overlap_duration / span_duration)
+
+        # Plausibility: prefer text with more alphabetic content and sensible word structure
+        def _plausibility_score(txt: str) -> float:
+            t = clean_text(txt)
+            if not t:
+                return 0.0
+            letters = sum(ch.isalpha() for ch in t)
+            digits = sum(ch.isdigit() for ch in t)
+            spaces = t.count(" ")
+            words = [w for w in re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", t)]
+            avg_word_len = (sum(len(w) for w in words) / len(words)) if words else 0.0
+            # heuristic: more letters than digits, reasonable avg word len, not too long
+            length_penalty = 0.0
+            if len(t) > 200:
+                length_penalty = 0.3
+            score = (letters / max(1, len(t))) * 0.6 + (avg_word_len / 12.0) * 0.3 + (spaces / max(1, len(t))) * 0.1
+            score -= min(0.4, digits * 0.02) + length_penalty
+            return max(0.0, min(1.0, score))
+
+        sub_plaus = _plausibility_score(sub_text)
+        span_plaus = _plausibility_score(span_text)
+
+        # Decision logic:
+        chosen_text = sub_text
+        # If subtitle is empty but span has content -> choose span
+        if not sub_text and span_text:
+            chosen_text = span_text
+        else:
+            # If transcript overlap is strong OR subtitle vs span similarity is low, consider transcript
+            # Use score gap to decide
+            # We also compute internal baseline: transcript plausibility advantage
+            plaus_gap = (span_plaus - sub_plaus) * 100.0
+            # If similarity is low or transcript has clear plausibility advantage and overlap support
+            if sub_vs_span < 70 or (plaus_gap > 5 and overlap_ratio > 0.5):
+                # If transcript seems clearly better, take it; else harmonize conservatively
+                if sub_vs_span <= (100 - prefer_transcript_if_score_gap):
+                    chosen_text = span_text
+                else:
+                    chosen_text = _harmonize_text_with_asr(sub_text, span_text)
+            else:
+                # They are similar; keep subtitle but optionally harmonize minor token errors
+                if fuzz is not None and sub_vs_span < 95:
+                    chosen_text = _harmonize_text_with_asr(sub_text, span_text)
+
+        # Apply reasonable-change guard
+        chosen_text = clean_text(chosen_text)
+        if not chosen_text:
+            chosen_text = sub_text  # never empty out the cue text
+
+        # Commit updates
+        if _is_change_reasonable(sub_text, chosen_text):
+            c["text"] = chosen_text
+
+        # Update timing if snapped
+        if new_start != start_s or new_end != end_s:
+            # Convert back to SRT-like timestamp preserving format style (assume SRT)
+            c["start"] = _seconds_to_timestamp(new_start)
+            c["end"] = _seconds_to_timestamp(new_end)
 
 
 def _normalize_transcript_segments(transcript: List[Dict]) -> List[Dict]:
@@ -641,11 +764,33 @@ def _timestamp_to_seconds(ts: str) -> float:
     """
     Convert SRT-like timestamp "HH:MM:SS,mmm" to seconds as float.
     """
+    if not isinstance(ts, str):
+        try:
+            return float(ts)
+        except Exception:
+            return 0.0
     m = re.match(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})", ts.strip())
     if not m:
         return 0.0
     h, mi, s, ms = m.groups()
     return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
+
+
+def _seconds_to_timestamp(seconds: float) -> str:
+    """
+    Convert seconds as float back to SRT-like timestamp "HH:MM:SS,mmm".
+    """
+    try:
+        ms_total = int(round(max(0.0, float(seconds)) * 1000.0))
+    except Exception:
+        ms_total = 0
+    h = ms_total // 3_600_000
+    ms_total %= 3_600_000
+    m = ms_total // 60_000
+    ms_total %= 60_000
+    s = ms_total // 1000
+    ms = ms_total % 1000
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def _harmonize_text_with_asr(sub_text: Any, asr_text: Any) -> str:
