@@ -6,6 +6,8 @@ using a Whisper model transcript as reference. It fixes missing texts,
 improves timestamps, and enforces monotonic timing for SRT-like subtitles.
 
 Note:
+- All timing values across this module are in seconds (float). Do NOT pass milliseconds.
+  A defensive heuristic detects ms-like values and raises a TypeError rather than auto-converting.
 - Aligned subtitles are represented with 'start' and 'end' as float seconds.
   To export these to SRT text reliably, use subtitle_time_utils.write_srt()
   which handles accurate hh:mm:ss,mmm formatting and edge cases.
@@ -327,51 +329,49 @@ def align_subtitles(
     preserve_subtitle_text: Optional[bool] = None,
 ) -> List[Dict]:
     """
-    Align and correct SRT subtitles using a Whisper transcript.
+    Align and correct SRT-like subtitles using a transcript while guaranteeing that all
+    timing values are seconds (float) at input, during processing, and in the returned output.
 
-    Parameters:
-        transcript: List of dicts from Whisper with keys:
-            - 'start' (float, seconds)
-            - 'end' (float, seconds)
-            - 'text' (str)
-        subtitles: List of dicts with keys:
-            - 'index' (int)
-            - 'start' (float, seconds)
-            - 'end' (float, seconds)
-            - 'text' (str, may be empty/blank)
-            - 'format' (str, 'srt')
-        cross_lingual: When True, indicates that the audio/transcript language differs from the
-            subtitle language. In this mode, alignment will ONLY modify timing and will NEVER
-            modify the subtitle text. This is safe for aligning translations without overwriting text.
-        preserve_subtitle_text: Optional explicit override. If provided, it takes precedence over
-            cross_lingual to decide whether text can be changed. If True, text is preserved
-            (timings-only). If False, text may be updated from the transcript. If None, it falls back
-            to `True` when cross_lingual is True, otherwise `False`.
+    Parameter formats (STRICTLY IN SECONDS):
+        transcript: List[dict] where each item contains:
+            - 'start': float seconds (>= 0)
+            - 'end': float seconds (> start)
+            - 'text': str (optional; default '')
+        subtitles: List[dict] where each item contains:
+            - 'index': int (optional; will be reindexed in output)
+            - 'start': float seconds (>= 0)
+            - 'end': float seconds (> start)
+            - 'text': str (may be empty/blank)
+            - 'format': str (optional; normalized to 'srt' in output)
+        cross_lingual: If True, the transcript language differs from subtitle language.
+            In this mode, only timings are adjusted; text is never replaced/normalized from transcript.
+        preserve_subtitle_text: If provided, overrides cross_lingual with:
+            - True  => preserve original subtitle text (timings-only)
+            - False => allow text normalization/fill from transcript when appropriate
+            - None  => defaults to True when cross_lingual=True, else False
 
     Returns:
-        A corrected list of subtitle dicts with the same structure. The function:
-        - Aligns each subtitle to the most suitable transcript segment using overlap and proximity.
-        - Adjusts timestamps to better match transcript segments by snapping to segment centers or boundaries.
-        - Enforces monotonic, non-overlapping timing with minimal gaps.
-        - Prints alignment corrections to console for observability.
-        - In monolingual mode (preserve_subtitle_text=False), may normalize/fill subtitle text using
-          transcript text. In cross-lingual/timings-only mode (preserve_subtitle_text=True), never
-          changes the subtitle text.
+        List[dict]: corrected subtitles with:
+            - 'index': consecutive ints starting from 1
+            - 'start': float seconds
+            - 'end': float seconds
+            - 'text': str
+            - 'format': 'srt'
 
-    Notes:
-        - If transcript is missing or very short, a placeholder distribution spreads subtitles across
-          an inferred timeline to avoid clustering at t=0.
-        - Non-destructive regarding non-text fields; fields beyond the required ones are preserved if present.
+    Guarantees and safety:
+        - All 'start' and 'end' are floats in seconds and non-negative.
+        - Negative or missing times are clamped/fixed forward; zero/negative durations are extended to >= MIN_DUR.
+        - Overlaps and out-of-order items are corrected to ensure monotonic timing with a minimum gap.
+        - If inputs appear to be in milliseconds, a TypeError is raised with a clear message.
+          We DO NOT auto-convert; callers must convert to seconds before calling.
 
-    Bugfix rationale:
-        This function previously could cascade timing shifts, bunching many cues toward the start when only
-        a few input timestamps were incorrect. The fix introduces:
-          - Stricter "already good" detection so well-aligned cues are preserved.
-          - Anchor-based stabilization to prevent forward-shift cascades from a single bad cue.
-          - A gentler monotonic enforcement that minimally shifts cues and never retroactively
-            pulls earlier anchors forward.
-          - Guardrails for sparse/short transcripts to avoid aggressive refits.
+    Edge cases handled:
+        - Out-of-order, overlapping, negative, or missing times
+        - Empty or sparse transcript (uniform distribution fallback)
+        - Blank texts are merged to reduce fragmentation
+        - Malformed items are skipped with diagnostic logging
 
+    This logic supersedes older implementations and enforces seconds-only semantics.
     """
     # Parameters for realistic timing
     MIN_DUR = 0.8   # seconds
@@ -379,35 +379,71 @@ def align_subtitles(
     MIN_GAP = 0.08  # seconds between captions
 
     # Additional conservative thresholds (bugfix)
-    # If a cue is within these thresholds relative to its matched segment, we keep its timing.
-    ALREADY_GOOD_OVL_RATIO = 0.7   # require 70% overlap (up from 60%)
+    ALREADY_GOOD_OVL_RATIO = 0.7   # require 70% overlap
     ALREADY_GOOD_CENTER_EPS = 0.20 # tighter center tolerance baseline
 
-    # Determine text preservation behavior:
-    # - If preserve_subtitle_text is explicitly provided, honor it.
-    # - Else, default to preserving text in cross-lingual mode, and allowing text normalization/updates otherwise.
+    # Determine text preservation behavior
     preserve_text = preserve_subtitle_text if preserve_subtitle_text is not None else bool(cross_lingual)
 
     def _cap_duration(d: float) -> float:
         return max(MIN_DUR, min(MAX_DUR, d))
 
-    # Defensive copies and normalization
+    # --- Input validation: ensure seconds (floats) and not milliseconds ---
+    def _collect_times(items: List[Dict]) -> List[float]:
+        vals: List[float] = []
+        for it in items or []:
+            if it is None:
+                continue
+            if "start" in it and it["start"] is not None:
+                vals.append(float(it["start"]))
+            if "end" in it and it["end"] is not None:
+                vals.append(float(it["end"]))
+        return vals
+
+    # Heuristic detection of ms-like values: many large values (e.g., thousands)
+    def _looks_like_milliseconds(values: List[float]) -> bool:
+        if not values:
+            return False
+        try:
+            arr = sorted(abs(float(v)) for v in values if v is not None)
+            if not arr:
+                return False
+            median = arr[len(arr)//2]
+            mn = arr[0]
+            # If median > 3000 and min > 100, likely ms scale
+            return (median > 3000.0) and (mn > 100.0)
+        except Exception:
+            return False
+
+    sub_times = _collect_times(subtitles or [])
+    trs_times = _collect_times(transcript or [])
+
+    if _looks_like_milliseconds(sub_times) or _looks_like_milliseconds(trs_times):
+        raise TypeError("align_subtitles expects times in seconds (float). "
+                        "Detected values that likely are milliseconds. Convert by dividing by 1000.0 before calling.")
+
+    # Defensive copies and normalization (seconds-only)
     subs: List[Dict] = []
     for s in subtitles or []:
         try:
+            start_val = s.get("start", 0.0)
+            end_val = s.get("end", None)
+            start_f = _safe_time(float(start_val))
+            end_f = _safe_time(float(end_val)) if end_val is not None else start_f + MIN_DUR
+            if end_f <= start_f:
+                end_f = start_f + MIN_DUR
             subs.append({
                 **s,
                 "index": int(s.get("index", 0) or 0),
-                "start": _safe_time(float(s.get("start", 0.0))),
-                "end": _safe_time(float(s.get("end", 0.0)) if s.get("end", 0.0) is not None else float(s.get("start", 0.0)) + MIN_DUR),
+                "start": float(start_f),
+                "end": float(end_f),
                 "text": _normalize_space(s.get("text", "")),
                 "format": s.get("format", "srt"),
             })
-        except Exception as e:
-            # Skip malformed subtitle entries but continue processing
+        except (ValueError, TypeError) as e:
             print(f"[align:error] malformed subtitle entry skipped: {e} | entry={s!r}")
 
-    # Normalize transcript segments
+    # Normalize transcript segments (seconds-only)
     trans: List[Dict] = []
     for seg in transcript or []:
         try:
@@ -417,8 +453,8 @@ def align_subtitles(
             if end <= start:
                 end = start + 0.4
             text = _normalize_space(seg_d.get("text", ""))
-            trans.append({"start": start, "end": end, "text": text})
-        except Exception as e:
+            trans.append({"start": float(start), "end": float(end), "text": text})
+        except (ValueError, TypeError) as e:
             print(f"[align:error] malformed transcript segment skipped: {e} | seg={seg!r}")
 
     # If there are no subtitles, synthesize from transcript directly
@@ -604,5 +640,17 @@ def align_subtitles(
             print(f"[align:index] #{s.get('index','?')} -> #{i}")
         s["index"] = i
         s["format"] = "srt"
+        # Final explicit seconds-only sanity
+        try:
+            s["start"] = float(s["start"])
+            s["end"] = float(s["end"])
+        except Exception as e:
+            raise TypeError(f"align_subtitles produced a non-float time for item #{i}: {e}")
+
+        if s["start"] < 0.0 or s["end"] < 0.0:
+            raise ValueError(f"align_subtitles produced negative time for item #{i}: start={s['start']} end={s['end']}")
+        if s["end"] <= s["start"]:
+            # Should never happen due to enforcement; guard anyway
+            s["end"] = s["start"] + MIN_DUR
 
     return corrected
