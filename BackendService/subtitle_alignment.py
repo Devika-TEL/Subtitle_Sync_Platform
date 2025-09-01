@@ -133,21 +133,35 @@ def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02, min_duration: flo
 
 
 # PUBLIC_INTERFACE
-def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> List[Dict]:
+def align_subtitles(
+    transcript_subs: List[Dict],
+    subtitle_subs: List[Dict],
+    *,
+    cross_lingual: bool = False,
+    drop_empty_cues: bool = True,
+) -> List[Dict]:
     """
     Align subtitle cues to a reference transcript.
 
     Behavior (Transcript is authoritative):
     - If the timestamp difference between transcript and subtitle is >= 1.0 second for start or end,
       overwrite the subtitle's corresponding start/end with the transcript values.
-    - If the text differs in any way (case, punctuation, spacing, or words), overwrite the subtitle text
-      with the exact transcript text.
+    - If cross_lingual=False and the text differs (case, punctuation, spacing, or words),
+      overwrite the subtitle text with the exact transcript text.
+      If cross_lingual=True, preserve subtitle text.
     - Preserve ordering by pairing cues by index (min length), then append any tail items as-is.
     - After merging, enforce minimal monotonic constraints to avoid overlaps.
+    - Additional safeguards:
+        * Never output an empty-text cue: if both transcript and subtitle text are blank,
+          reuse the last seen non-empty text for the first cue only (to avoid losing initial text),
+          else skip the cue (when drop_empty_cues=True).
+        * Always retain the first intended subtitle text: if the transcript text is blank, keep the subtitle text.
 
     Args:
         transcript_subs: List of transcript segments (authoritative) with fields start, end, text (index/format optional).
         subtitle_subs: List of subtitle cues to be corrected.
+        cross_lingual: If True, do not replace subtitle text with transcript text.
+        drop_empty_cues: If True, remove cues that end up with empty text (except first-cue safeguard).
 
     Returns:
         List[dict]: Aligned subtitles with fields index, start, end, text, format.
@@ -185,6 +199,9 @@ def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> L
     n = min(len(transcript), len(subtitles))
     merged: List[Dict] = []
 
+    last_non_empty_text: Optional[str] = None
+    first_cue_text_fallback_used = False
+
     for i in range(n):
         t = _norm_item(transcript[i])
         s = _norm_item(subtitles[i])
@@ -212,20 +229,54 @@ def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> L
         start = t_start if abs(t_start - s_start) >= 1.0 else s_start
         end = t_end if abs(t_end - s_end) >= 1.0 else s_end
 
-        # Text correction: any difference -> use transcript text
-        text = t_text if t_text != s_text else s_text
+        # Text selection:
+        # - If cross-lingual, preserve subtitle text.
+        # - Else, if transcript text is non-empty and differs -> use transcript text.
+        # - Else, keep subtitle text.
+        if cross_lingual:
+            chosen_text = s_text
+        else:
+            if not _is_blank(t_text) and t_text != s_text:
+                chosen_text = t_text
+            else:
+                chosen_text = s_text if not _is_blank(s_text) else t_text
+
+        # First-cue safeguard & empty-cue prevention:
+        # If both are blank, for the very first cue, try to reuse a previous non-empty (not available yet),
+        # or keep as blank for now and handle after building; else skip if drop_empty_cues.
+        # We instead implement progressive carry-forward for the first cue only if both blank.
+        if _is_blank(chosen_text):
+            # Retain first subtitle non-empty when transcript is blank
+            if i == 0 and not first_cue_text_fallback_used:
+                # Prefer the subtitle's text if it has any hidden content (already checked blank),
+                # otherwise do not emit this cue at all if dropping empties.
+                if drop_empty_cues:
+                    # Skip emitting this cue entirely
+                    first_cue_text_fallback_used = True  # mark as processed decision
+                    continue
+                # If not dropping empties, keep as minimal non-empty placeholder using last known text if any
+                if last_non_empty_text:
+                    chosen_text = last_non_empty_text
+                # else remain blank; will be filtered below if needed
 
         # Sanity: non-negative and end > start
         start = _safe_time(start)
         end = max(_safe_time(end), start + 0.01)
 
+        # If resulting text is blank and policy is to drop empty cues, skip append
+        if drop_empty_cues and _is_blank(chosen_text):
+            continue
+
         merged.append({
             "index": idx,
             "start": float(start),
             "end": float(end),
-            "text": text,
+            "text": chosen_text,
             "format": s.get("format", t.get("format", "srt")),
         })
+
+        if not _is_blank(chosen_text):
+            last_non_empty_text = chosen_text
 
     # Handle tails if lists differ in length: append remaining subtitles as-is,
     # since we don't have corresponding transcript segments for authoritative overwrite.
@@ -239,11 +290,17 @@ def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> L
                 idx = j + 1
             start = _safe_time(_sec(s.get("start")))
             end = max(_safe_time(_sec(s.get("end"), start + 0.01)), start + 0.01)
+            txt = _normalize_space(s.get("text", ""))
+            # Apply empty-cue policy for tails
+            if drop_empty_cues and _is_blank(txt):
+                continue
+            if not _is_blank(txt):
+                last_non_empty_text = txt
             merged.append({
                 "index": idx,
                 "start": float(start),
                 "end": float(end),
-                "text": _normalize_space(s.get("text", "")),
+                "text": txt,
                 "format": s.get("format", "srt"),
             })
 
@@ -258,13 +315,36 @@ def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> L
                 idx = j + 1
             t_start = _safe_time(_sec(t.get("start")))
             t_end = max(_safe_time(_sec(t.get("end"), t_start + 0.01)), t_start + 0.01)
+            txt = _normalize_space(t.get("text", ""))
+            if drop_empty_cues and _is_blank(txt):
+                continue
+            if not _is_blank(txt):
+                last_non_empty_text = txt
             merged.append({
                 "index": idx,
                 "start": float(t_start),
                 "end": float(t_end),
-                "text": _normalize_space(t.get("text", "")),
+                "text": txt,
                 "format": t.get("format", "srt"),
             })
+
+    # If all cues got dropped due to empties, but we had at least one original subtitle,
+    # ensure we don't return an empty list by attempting to reinstate the first non-empty subtitle cue.
+    if not merged and subtitles:
+        # Find first non-empty subtitle text to reinstate
+        for j, s in enumerate(subtitles, start=1):
+            txt = _normalize_space(_norm_item(s).get("text", ""))
+            if not _is_blank(txt):
+                start = _safe_time(_sec(_norm_item(s).get("start"), 0.0))
+                end = max(_safe_time(_sec(_norm_item(s).get("end"), start + 0.5)), start + 0.01)
+                merged.append({
+                    "index": 1,
+                    "start": float(start),
+                    "end": float(end),
+                    "text": txt,
+                    "format": _norm_item(s).get("format", "srt"),
+                })
+                break
 
     # Reindex cleanly and ensure monotonic minimal constraints
     for k, s in enumerate(merged, start=1):
