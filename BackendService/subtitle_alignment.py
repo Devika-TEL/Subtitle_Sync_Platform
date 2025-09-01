@@ -14,7 +14,7 @@ Note:
 
 Debugging and input preparation tips:
 - Provide transcript segments with realistic start/end in seconds, sorted by time.
-- If aligning translations, call align_subtitles(..., cross_lingual=True) to avoid overwriting text.
+- This function assumes same-language alignment and preserves subtitle text (no transcript text injection).
 - Use console logs prefixed with [align:*] to understand how each cue was matched and refit.
   Frequent [align:refit] snap-to-seg messages indicate poor initial timing or transcript mismatch.
 - If you observe many [align:cap] messages shrinking durations, consider increasing MAX_DUR or check whether your transcript has very short segments.
@@ -321,57 +321,35 @@ def _refit_times_to_segment(sub: Dict, seg: Dict, *, min_dur: float = 0.5) -> No
 
 
 # PUBLIC_INTERFACE
-def align_subtitles(
-    transcript: List[Dict],
-    subtitles: List[Dict],
-    *,
-    cross_lingual: bool = False,
-    preserve_subtitle_text: Optional[bool] = None,
-) -> List[Dict]:
+def align_subtitles(transcript, subtitles, **_legacy_kwargs):
     """
-    Align and correct SRT-like subtitles using a transcript while guaranteeing that all
-    timing values are seconds (float) at input, during processing, and in the returned output.
+    Align and correct SRT-like subtitles using a Whisper transcript as the timing ground truth.
+    Assumptions:
+      - transcript and subtitles are in the same language (no translation logic).
+      - All timing values are seconds (float).
 
-    Parameter formats (STRICTLY IN SECONDS):
-        transcript: List[dict] where each item contains:
-            - 'start': float seconds (>= 0)
-            - 'end': float seconds (> start)
-            - 'text': str (optional; default '')
-        subtitles: List[dict] where each item contains:
-            - 'index': int (optional; will be reindexed in output)
-            - 'start': float seconds (>= 0)
-            - 'end': float seconds (> start)
-            - 'text': str (may be empty/blank)
-            - 'format': str (optional; normalized to 'srt' in output)
-        cross_lingual: If True, the transcript language differs from subtitle language.
-            In this mode, only timings are adjusted; text is never replaced/normalized from transcript.
-        preserve_subtitle_text: If provided, overrides cross_lingual with:
-            - True  => preserve original subtitle text (timings-only)
-            - False => allow text normalization/fill from transcript when appropriate
-            - None  => defaults to True when cross_lingual=True, else False
+    Parameters:
+        transcript: Whisper output-like iterable with segments containing 'start', 'end', 'text'.
+                    Accepts a list of dicts/objects. Values must be seconds.
+        subtitles:  List[dict] with keys:
+                    - 'index': int
+                    - 'start': float seconds
+                    - 'end': float seconds
+                    - 'text': str
+                    - 'format': str
 
     Returns:
-        List[dict]: corrected subtitles with:
-            - 'index': consecutive ints starting from 1
-            - 'start': float seconds
-            - 'end': float seconds
-            - 'text': str
-            - 'format': 'srt'
+        List[dict]: corrected subtitles aligned to transcript timings with fields:
+                    - 'index' (reindexed, 1..N)
+                    - 'start' (float seconds)
+                    - 'end' (float seconds)
+                    - 'text' (string; preserved/normalized)
+                    - 'format' = 'srt'
 
-    Guarantees and safety:
-        - All 'start' and 'end' are floats in seconds and non-negative.
-        - Negative or missing times are clamped/fixed forward; zero/negative durations are extended to >= MIN_DUR.
-        - Overlaps and out-of-order items are corrected to ensure monotonic timing with a minimum gap.
-        - If inputs appear to be in milliseconds, a TypeError is raised with a clear message.
-          We DO NOT auto-convert; callers must convert to seconds before calling.
-
-    Edge cases handled:
-        - Out-of-order, overlapping, negative, or missing times
-        - Empty or sparse transcript (uniform distribution fallback)
-        - Blank texts are merged to reduce fragmentation
-        - Malformed items are skipped with diagnostic logging
-
-    This logic supersedes older implementations and enforces seconds-only semantics.
+    Behavior:
+      - Uses transcript segments as timing anchors and realigns each subtitle to the best-matching segment.
+      - Preserves subtitle text (no cross-lingual translation or replacement), but normalizes spacing.
+      - Robust across different languages; no language-specific heuristics.
     """
     # Parameters for realistic timing
     MIN_DUR = 0.8   # seconds
@@ -382,8 +360,8 @@ def align_subtitles(
     ALREADY_GOOD_OVL_RATIO = 0.7   # require 70% overlap
     ALREADY_GOOD_CENTER_EPS = 0.20 # tighter center tolerance baseline
 
-    # Determine text preservation behavior
-    preserve_text = preserve_subtitle_text if preserve_subtitle_text is not None else bool(cross_lingual)
+    # Same-language mode: preserve subtitle text; do not overwrite from transcript
+    preserve_text = True
 
     def _cap_duration(d: float) -> float:
         return max(MIN_DUR, min(MAX_DUR, d))
@@ -534,8 +512,8 @@ def align_subtitles(
             print(f"[align:match] #{i:>3} matched transcript seg {idx} [{seg['start']:.2f}-{seg['end']:.2f}]")
             # In timings-only (cross-lingual) mode, do not modify subtitle text.
             # Otherwise, apply transcript text when appropriate (e.g., to fill blanks/normalize).
-            if not preserve_text:
-                _apply_text_from_transcript(new_s, seg)
+            # Same-language alignment: preserve subtitle text, only normalize spacing (already done).
+            # No transcript text injection.
 
             # Conservative skip: if current times already overlap enough and are close in center, don't refit.
             seg_start, seg_end = float(seg["start"]), float(seg["end"])
