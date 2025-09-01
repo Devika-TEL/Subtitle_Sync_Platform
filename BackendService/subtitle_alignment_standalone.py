@@ -25,6 +25,8 @@ from typing import List, Dict, Any, Optional, Tuple, Callable, Union
 import re
 import logging
 from math import isfinite
+import os
+import json
 
 
 # ---------------------------
@@ -469,6 +471,108 @@ def _wrap_text(text: str, max_chars_per_line: int, max_lines: int) -> List[str]:
     return fixed[:max_lines]
 
 
+# ---------------------------
+# Optional Gemini LLM integration
+# ---------------------------
+
+def _get_gemini_api_key() -> str:
+    """
+    Read Gemini API key from environment. The orchestrator should set GEMINI_API_KEY in .env.
+    If not set, returns an empty string which disables LLM usage.
+    """
+    # IMPORTANT: Do NOT hardcode secrets. This is a placeholder variable name only.
+    return os.getenv("GEMINI_API_KEY", "").strip()
+
+
+def _build_gemini_prompt(transcript_text: str, subtitle_text: str, lang: Optional[str]) -> str:
+    """
+    Build a concise system+user style prompt instructing the LLM to minimally adjust the subtitle text
+    so it matches transcript wording and remains suitable for two-line subtitle display.
+    The LLM must return ONLY the corrected subtitle text (no extra prose).
+    """
+    language = (lang or "the video language").strip()
+    return (
+        "You are a subtitle correction assistant.\n"
+        f"Language: {language}\n"
+        "Task: Given the reference transcript excerpt and the current subtitle cue text, minimally adjust the subtitle\n"
+        "to match the transcript wording exactly while preserving readability and subtitle style. Keep punctuation natural.\n"
+        "Constraints:\n"
+        "- Keep it brief and suitable for up to 2 lines with around 42 characters per line.\n"
+        "- Do not add extra content; only align wording and fix obvious spelling/casing issues.\n"
+        "- Output ONLY the corrected subtitle text. No explanations.\n\n"
+        f"Transcript excerpt:\n{transcript_text}\n\n"
+        f"Subtitle cue:\n{subtitle_text}\n\n"
+        "Return the corrected subtitle cue text:"
+    )
+
+
+def _call_gemini(prompt: str, model_name: str = "gemini-1.5-flash") -> Optional[str]:
+    """
+    Call Gemini API with the given prompt and return the model text output, or None if unavailable.
+    This uses a lightweight 'requests' POST to the REST API for portability.
+
+    Implementation details:
+    - Expects GEMINI_API_KEY environment variable to be set.
+    - Uses models.generateContent endpoint format.
+    - If the call fails for any reason, returns None and caller should fallback.
+
+    Note: This function deliberately avoids hard dependencies; if requests is absent, it returns None.
+    """
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return None
+    try:
+        import requests  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        body = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.3,
+                "topP": 0.95,
+                "topK": 40,
+                "maxOutputTokens": 256
+            }
+        }
+        resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=20)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        # Expected path: candidates[0].content.parts[0].text
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        if not parts:
+            return None
+        text_out = parts[0].get("text", "")
+        return text_out.strip() if isinstance(text_out, str) else None
+    except Exception:
+        return None
+
+
+def _gemini_correct_subtitle(sub_text: str, transcript_span_text: str, lang: Optional[str]) -> Optional[str]:
+    """
+    Prepare prompt and call Gemini to get a corrected subtitle text.
+    Returns corrected text if successful, otherwise None for fallback.
+    """
+    if not sub_text or not transcript_span_text:
+        return None
+    prompt = _build_gemini_prompt(transcript_span_text, sub_text, lang)
+    return _call_gemini(prompt)
+
+
 # PUBLIC_INTERFACE
 def correct_subtitle_text(
     text: str,
@@ -800,8 +904,74 @@ def write_corrected_alignment(
         enable_hybrid=False,  # pure fuzzy by default to avoid heavy model load unless caller opts in
     )
 
-    # Light correction on text
+    # Optional Gemini transcript-aware correction (safe no-op when no GEMINI_API_KEY)
     lang = (language or "").strip().lower() or "auto"
+    use_llm = bool(_get_gemini_api_key())
+    if use_llm:
+        # Build a cheap transcript text index to provide context: short window around each aligned cue.
+        # We'll find nearest transcript span by time.
+        def _normalize_transcript_for_llm(t: Any) -> List[Dict]:
+            if isinstance(t, dict):
+                raw = t.get("segments") or []
+                if isinstance(raw, list):
+                    t = raw
+            if not isinstance(t, list):
+                return []
+            out = []
+            for seg in t:
+                if isinstance(seg, dict):
+                    try:
+                        s = float(seg.get("start", 0.0))
+                    except Exception:
+                        s = 0.0
+                    try:
+                        e = float(seg.get("end", 0.0))
+                    except Exception:
+                        e = s
+                    txt = str(seg.get("text", "") or "")
+                    out.append({"start": s, "end": (e if e >= s else s), "text": txt})
+                else:
+                    out.append({"start": 0.0, "end": 0.0, "text": str(seg)})
+            return sorted(out, key=lambda x: float(x.get("start", 0.0)))
+
+        t_norm = _normalize_transcript_for_llm(transcript)
+
+        def _collect_transcript_excerpt(start: float, end: float, window: float = 3.0) -> str:
+            if not t_norm:
+                return ""
+            lo = max(0.0, start - window)
+            hi = end + window
+            texts: List[str] = []
+            for seg in t_norm:
+                s, e = float(seg["start"]), float(seg["end"])
+                if e < lo:
+                    continue
+                if s > hi:
+                    break
+                seg_text = str(seg.get("text", "") or "").strip()
+                if seg_text:
+                    texts.append(seg_text)
+            return " ".join(texts).strip()
+
+        for i, cue in enumerate(aligned_cues):
+            try:
+                cstart = float(cue.get("start", 0.0))
+                cend = float(cue.get("end", cstart))
+                sub_text = str(cue.get("text", "") or "")
+                excerpt = _collect_transcript_excerpt(cstart, cend, window=3.0)
+                if excerpt and sub_text:
+                    llm_text = _gemini_correct_subtitle(
+                        sub_text=sub_text,
+                        transcript_span_text=excerpt,
+                        lang=(None if lang == "auto" else lang),
+                    )
+                    if llm_text:
+                        cue["text"] = llm_text
+            except Exception:
+                # LLM path is best-effort; swallow any issues and continue
+                continue
+
+    # Light local correction on text (grammar/punctuation/wrapping)
     final_cues: List[Dict] = []
     for cue in aligned_cues:
         fixed_text = correct_subtitle_text(
@@ -822,6 +992,8 @@ def write_corrected_alignment(
 
 if __name__ == "__main__":
     # Simple manual demo for quick testing when running this file directly.
+    # Optional: export GEMINI_API_KEY to enable LLM correction for the demo.
+    #   export GEMINI_API_KEY="your-real-api-key"
     demo_transcript = [
         {"text": "Hello world", "start": 0.0, "end": 1.0},
         {"text": "This is a demo", "start": 1.05, "end": 2.5},

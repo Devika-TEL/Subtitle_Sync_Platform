@@ -41,8 +41,31 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
-- For the standalone subtitle generation script (standalone_subtitle_generation.py), translations are performed using Google Gemini when the target language differs from the detected language. You must set GEMINI_API_KEY in your environment or .env for translation to work. Example .env:
-  GEMINI_API_KEY=your_api_key_here
+
+### Gemini LLM Integration (optional)
+
+We now support optional Gemini (Google Generative AI) usage for transcript-aware subtitle correction within the standalone alignment module.
+
+Where it’s used:
+- BackendService/subtitle_alignment_standalone.py
+  - Function write_corrected_alignment(...) will attempt an LLM correction pass for each aligned cue if GEMINI_API_KEY is set. If the key is not set or the API call fails, it falls back gracefully to local heuristics and grammar/punctuation fixes.
+
+How to enable:
+- Set the environment variable GEMINI_API_KEY with your real key (do not commit secrets).
+- No code changes required.
+
+Example (local):
+export GEMINI_API_KEY="your-real-api-key"
+python BackendService/subtitle_alignment_standalone.py
+
+Implementation details:
+- The module uses a minimal requests-based REST call to:
+  https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY
+- Request includes a concise prompt with a transcript excerpt and the current cue text. The LLM is instructed to return ONLY the corrected subtitle text.
+- Safe by default: if requests is not available or any error occurs, the function returns None and the pipeline continues without LLM output.
+
+Security:
+- No secrets are hardcoded. Ensure GEMINI_API_KEY is supplied at runtime via environment or your deployment’s secret manager.
 
 ### Alignment modes and configuration
 
