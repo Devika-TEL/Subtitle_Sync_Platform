@@ -5,6 +5,14 @@ This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
 
+Alignment policy (updated):
+- Exact text matches: If a subtitle's text exactly matches its corresponding transcript text, the subtitle's timestamps
+  are snapped to the transcript's timestamps (authoritative timing).
+- Non-exact matches: The module optionally queries Gemini to judge semantic equivalence.
+  * If semantically equivalent: keep the subtitle text and snap its timestamps to the transcript span.
+  * If not semantically equivalent (or Gemini unavailable): replace the subtitle text with the transcript span text and
+    snap timestamps. The transcript is the source of truth when semantics do not match.
+
 Time normalization contract:
 - All time values for 'start' and 'end' are normalized to float seconds internally and in outputs.
 - If inputs contain SRT-like timecodes or strings, they are converted to float seconds at ingestion.
@@ -355,10 +363,22 @@ def _best_transcript_span_for_sub(
     """
     Find the best contiguous span [i, j] of transcript segments starting from start_idx within max_span
     that maximizes similarity to the subtitle.
+
+    Enhancement: If an exact text match is found in any single transcript segment starting
+    from start_idx within the search window, immediately return that exact-match span with a perfect score.
+
     - If hybrid=False: use Jaccard over tokens.
-    - If hybrid=True: use weighted RapidFuzz + Embedding cosine.
+    - If hybrid=True: use weighted RapidFuzz + Embedding cosine (and optional Gemini score if provided).
     Returns (i, j_inclusive, score). If no span exceeds min_sim, returns (start_idx, start_idx, 0.0).
     """
+    # Fast-path: exact literal match snap
+    if raw_sub_text:
+        sub_stripped = (raw_sub_text or "").strip()
+        for k in range(start_idx, min(len(transcript), start_idx + max_span)):
+            t_text = str(transcript[k].get("text", "")).strip()
+            if t_text and t_text == sub_stripped:
+                return (k, k, 1.0)
+
     best_i, best_j, best_score = start_idx, start_idx, 0.0
     for i in range(start_idx, min(len(transcript), start_idx + max_span)):
         span_text = ""
@@ -736,12 +756,24 @@ def align_subtitles_to_transcript(
     delayed_start_threshold: Optional[float] = 0.5,
 ) -> List[Dict]:
     """
-    Align subtitles' start/end timings to a reference transcript as much as possible.
+    Align subtitles' start/end timings and text to a reference transcript.
+
+    Rules implemented:
+    1) If subtitle text and the matched transcript text are exactly the same (literal match) but timestamps differ,
+       snap the subtitle start/end to the transcript span timings.
+    2) If texts do not match literally, use Gemini SDK (if enabled via env) to test if they are semantically equivalent.
+       - If semantically equivalent, keep the subtitle text and snap its timestamps to the transcript span timings.
+       - If not semantically equivalent (or Gemini unavailable), correct the subtitle text to exactly match the transcript
+         span text and align timestamps to the transcript.
+    3) Transcript is the authority whenever semantic parity is not met.
 
     Contract:
     - Inputs may contain numeric seconds, strings, or SRT-like timecodes for 'start'/'end'.
     - All inputs are normalized to float seconds internally.
     - The returned list always uses float seconds for 'start' and 'end' (no strings/timecodes).
+    - Gemini integration requires environment variables:
+        GEMINI_ENABLED=1, GEMINI_API_KEY, optional GEMINI_MODEL_NAME
+      If not available, semantic checks fall back to hybrid/fuzzy or simple heuristics only.
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -889,9 +921,24 @@ def align_subtitles_to_transcript(
             span_text = _merge_texts(span)
             span_start, span_end = _span_time(span)
 
+            # Decision 1: literal match => snap times to transcript span
+            literal_match = sub_text.strip() == span_text.strip()
+
+            # Optional semantic equivalence via Gemini (only if no literal match)
+            semantically_equivalent = False
+            if not literal_match and gemini_client:
+                try:
+                    sim = _gemini_similarity_hint(sub_text.strip(), span_text.strip(), gemini_client)
+                    # Threshold: fairly strict, but tolerant to minor paraphrase
+                    semantically_equivalent = sim >= 0.85
+                except Exception:
+                    semantically_equivalent = False
+
+            # Compute target times: always prefer transcript span times when we deem texts equivalent or will replace text
+            # We still distribute within span using reading-speed estimate to respect min durations and gaps.
             last_end = aligned[-1]["end"] if aligned else 0.0
             est_start, est_end = _distribute_time_within_span_with_delayed_fix(
-                sub_text=sub_text,
+                sub_text=(span_text if (literal_match or semantically_equivalent or not sub_text.strip()) else sub_text),
                 span_text=span_text,
                 span_start=span_start,
                 span_end=span_end,
@@ -909,10 +956,25 @@ def align_subtitles_to_transcript(
                     est_end = span_end
                     est_start = max(span_start, est_start - shift)
 
+            # Rule application on text:
+            # - If literal match: keep original subtitle text (already same) and snap times.
+            # - Else if semantic equivalent: keep subtitle text, but snap times to transcript span.
+            # - Else (not equivalent or Gemini not available): replace subtitle text with transcript span text and align times.
+            if literal_match:
+                # Text unchanged; times snapped (via est_start/est_end within span)
+                new_text = sub_text
+            elif semantically_equivalent:
+                new_text = sub_text
+            else:
+                # Semantic mismatch: Use transcript as authority for text.
+                new_text = span_text
+
+            new_cue["text"] = new_text
             new_cue["start"] = float(est_start)
             new_cue["end"] = float(est_end)
             t_idx = max(t_idx, j)
         else:
+            # No acceptable span: keep original timing (cleaned to min duration), do not alter text.
             start_o = _safe_float(cue.get("start", 0.0))
             end_o = _safe_float(cue.get("end", start_o + min_duration))
             if end_o - start_o < min_duration:
@@ -921,14 +983,17 @@ def align_subtitles_to_transcript(
             new_cue["end"] = float(end_o)
 
         if _logger is not None and (new_cue["start"] != orig_start or new_cue["end"] != orig_end):
+            # Indicate if text changed relative to original
+            text_changed = (new_cue.get("text", "") or "") != (sub_text or "")
             _logger.info(
-                "Alignment change | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f | sim=%0.3f",
+                "Alignment change | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f | sim=%0.3f | text_changed=%s",
                 cue_idx,
                 orig_start,
                 orig_end,
                 new_cue["start"],
                 new_cue["end"],
                 float(score),
+                str(bool(text_changed)),
             )
 
         aligned.append(new_cue)
@@ -997,6 +1062,14 @@ def write_corrected_alignment(
             - format: str (propagated to output if provided)
         processed_dir: Deprecated here; retained for compatibility (no write happens).
         language: Optional language code guiding light text correction.
+
+    Behavior summary:
+    - During alignment, for each cue we compare with the best transcript span:
+        * If texts are exactly the same, we snap the cue times to the transcript span.
+        * If texts differ, we use Gemini (if enabled) to check semantic equivalence. If equivalent, we keep the subtitle
+          text and snap its times to the transcript span. If not equivalent or Gemini unavailable, we replace the subtitle
+          text with the transcript span text and snap times.
+    - After alignment, we apply light grammatical/punctuation correction and OTT wrapping conservatively.
 
     Returns:
         List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds:
