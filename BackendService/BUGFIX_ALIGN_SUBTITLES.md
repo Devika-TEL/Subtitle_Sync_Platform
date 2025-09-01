@@ -12,6 +12,7 @@ Fix summary:
 - Added guardrails for sparse/short transcripts to avoid aggressive refits.
 - New: Prevent early display by clamping cue starts to the transcript segment start when a cue leads by >120ms, both during per-cue selection and in a final sync pass.
 - New: Added diagnostics [align:lead-clamp] and [align:post-sync] to trace when cues are adjusted to avoid leading the transcript.
+- New: Anchoring policy for the beginning of the subtitle stream: For the first N cues (default N=3), strictly disallow starts earlier than the paired transcript onset and enforce a minimal initial duration (default 0.6s). Diagnostic tag [align:anchor-begin] documents these adjustments. This prevents the “first cues disappear before audio starts” issue without pushing later cues forward.
 
 Testing:
 - Added tests in BackendService/tests/test_subtitle_alignment.py:

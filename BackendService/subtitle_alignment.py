@@ -395,6 +395,37 @@ def align_subtitles(
     # - min_duration: enforce at least 1.0s so subtitles are visible/readable
     _ensure_monotonic(merged, min_gap=0.03, min_duration=0.8)
 
+    # BEGIN targeted early-cue anchoring
+    # Problem: first cues may appear before the actual audio/transcript onset and vanish too quickly.
+    # Fix: explicitly prevent the first N cues from starting before their transcript segment start,
+    #      and ensure they have a minimal readable duration. This anchoring is limited to the initial
+    #      region and does not push all cues forward unnaturally.
+    ANCHOR_FIRST_N = 3  # configurable: number of initial cues to enforce strict anchoring
+    MIN_ANCHOR_DUR = 0.6  # configurable: minimal duration for anchored cues
+    # Derive transcript starts for first N index-paired items
+    mcount = min(len(transcript), len(merged), ANCHOR_FIRST_N)
+    for i in range(mcount):
+        t_i = transcript[i]
+        s_i = merged[i]
+        try:
+            t_start = float(_get_seg_value(t_i, "start", 0.0))
+            t_end = float(_get_seg_value(t_i, "end", t_start + 0.01))
+        except Exception:
+            t_start, t_end = 0.0, 0.01
+        # If subtitle starts before transcript onset (any lead > 0), clamp to transcript start.
+        if s_i["start"] < t_start:
+            before = (s_i["start"], s_i["end"])
+            s_i["start"] = t_start
+            # Enforce a minimal duration for readability without over-extending beyond transcript end.
+            s_i["end"] = max(s_i["end"], s_i["start"] + MIN_ANCHOR_DUR)
+            if s_i["end"] > t_end + 0.5:
+                s_i["end"] = min(s_i["end"], t_end + 0.5)
+            print(f"[align:anchor-begin] #{s_i.get('index','?')} {before[0]:.2f}-{before[1]:.2f} -> {s_i['start']:.2f}-{s_i['end']:.2f} (anchor to transcript onset)")
+        else:
+            # If it starts after transcript start, keep as-is; do not push forward.
+            pass
+    # END targeted early-cue anchoring
+
     # Diagnostics-driven sync: ensure no cue leads its transcript counterpart (index-paired)
     # This prevents early display when transcript starts later.
     for i in range(min(len(transcript), len(merged))):
