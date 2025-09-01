@@ -68,20 +68,35 @@ def run_quality_check_and_correct(
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
 
     if enforce_ott:
-        # Enforce max two lines per caption (super naive: truncate extra lines in blocks)
+        # Enforce max two lines per caption while ensuring we do not drop all text
         blocks = re.split(r"\n\s*\n", normalized.strip())
         fixed_blocks: List[str] = []
         for b in blocks:
             parts = b.splitlines()
-            if len(parts) > 4:  # number, timing, text lines...
+            if len(parts) >= 2 and "-->" in "\n".join(parts[:2]):
                 head = parts[:2]
                 text_lines = parts[2:]
-                if len(text_lines) > 2:
-                    text_lines = text_lines[:2]
-                # Only trim trailing spaces on text lines; do not alter actual words
+                # Trim trailing spaces only
                 text_lines = [tl.rstrip() for tl in text_lines]
+                # Remove leading/trailing completely blank text lines
+                while text_lines and text_lines[0].strip() == "":
+                    text_lines.pop(0)
+                while text_lines and text_lines[-1].strip() == "":
+                    text_lines.pop()
+                # If after cleanup no text remains, preserve at least one safe placeholder
+                if not text_lines:
+                    text_lines = ["…"]
+                # Limit to two lines, prioritizing non-empty lines
+                non_empty = [tl for tl in text_lines if tl.strip() != ""]
+                if len(non_empty) >= 2:
+                    text_lines = non_empty[:2]
+                elif len(non_empty) == 1:
+                    text_lines = [non_empty[0]]
+                else:
+                    text_lines = ["…"]
                 fixed_blocks.append("\n".join(head + text_lines))
             else:
+                # Not a recognized block, keep as-is
                 fixed_blocks.append(b)
         normalized = "\n\n".join(fixed_blocks) + "\n"
 

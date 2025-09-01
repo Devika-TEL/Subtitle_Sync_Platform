@@ -130,6 +130,52 @@ def write_srt(subtitles: List[Dict]) -> str:
     Returns:
       str: full SRT file content with trailing newline.
     """
+    def _sanitize_text_lines(raw_text: str) -> List[str]:
+        """
+        Preserve original text content as much as possible while ensuring we never
+        emit an empty cue. Strategy:
+        - Split by lines preserving internal newlines.
+        - Trim trailing spaces on each line only (do not strip leading words).
+        - Drop leading/trailing blank lines.
+        - Collapse multiple consecutive blank lines to a single blank line.
+        - Enforce max 2 lines (SRT OTT friendly) while preferring non-empty lines.
+        - If all lines are empty/whitespace, return a single placeholder "…".
+        """
+        if raw_text is None:
+            return ["…"]
+        # Split to lines
+        lines = str(raw_text).splitlines()
+        # Trim trailing spaces only
+        lines = [ln.rstrip() for ln in lines]
+        # Remove leading/trailing blank lines
+        while lines and lines[0].strip() == "":
+            lines.pop(0)
+        while lines and lines[-1].strip() == "":
+            lines.pop()
+        # Collapse multiple blank lines
+        collapsed: List[str] = []
+        blank = False
+        for ln in lines:
+            if ln.strip() == "":
+                if not blank:
+                    collapsed.append("")
+                    blank = True
+            else:
+                collapsed.append(ln)
+                blank = False
+        # If after cleanup nothing remains, ensure a non-empty placeholder
+        if not collapsed:
+            return ["…"]
+        # Enforce up to 2 lines, giving preference to non-empty ones
+        non_empty = [ln for ln in collapsed if ln.strip() != ""]
+        if len(non_empty) >= 2:
+            return non_empty[:2]
+        if len(non_empty) == 1:
+            # include one blank if there was structure, else just single line
+            return [non_empty[0]]
+        # No non-empty but we have blanks -> fallback
+        return ["…"]
+
     blocks: List[str] = []
     for idx, item in enumerate(subtitles, start=1):
         start_f = float(item.get("start", 0.0))
@@ -146,9 +192,9 @@ def write_srt(subtitles: List[Dict]) -> str:
             str(item.get("index", idx)),
             f"{sh} --> {eh}",
         ]
-        # If text may be multi-line, split on \n as-is
-        text_lines = str(text or "").splitlines() or [""]
-        block_lines.extend(text_lines)
+        # Sanitize text lines to avoid empty cues
+        safe_text_lines = _sanitize_text_lines(text)
+        block_lines.extend(safe_text_lines)
 
         blocks.append("\n".join(block_lines))
 

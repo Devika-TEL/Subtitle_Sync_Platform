@@ -99,7 +99,15 @@ def conservative_merge_subtitle_update(
     new_text = str(proposal.get("text", old_text) or "")
 
     if _should_update_text(old_text, new_text):
-        merged["text"] = new_text
+        # Only accept the new text if it actually has word content,
+        # or if the old text had no word content (so we are improving it).
+        old_words = _extract_words(old_text)
+        new_words = _extract_words(new_text)
+        if new_words or not old_words:
+            merged["text"] = new_text
+        else:
+            # Prevent losing meaningful original text
+            merged["text"] = old_text
     else:
         merged["text"] = old_text
 
