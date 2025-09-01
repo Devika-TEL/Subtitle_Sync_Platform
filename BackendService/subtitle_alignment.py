@@ -323,7 +323,8 @@ def _refit_times_to_segment(sub: Dict, seg: Dict, *, min_dur: float = 0.5) -> No
 # PUBLIC_INTERFACE
 def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> List[Dict]:
     """
-    Merge two subtitle lists (original and proposed) applying strict rules:
+    Merge two subtitle lists (original and proposed) applying strict rules, robustly handling
+    list/dict or arbitrary objects for items to avoid KeyError/TypeError.
 
     - Timestamps (start/end) are updated only if the absolute difference between
       original and proposed is >= 1.0 second.
@@ -333,17 +334,20 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
     - Returns the merged/corrected list of subtitles (dicts with index, start, end, text, format).
 
     Parameters:
-        original_subs: List[dict] with at least keys 'start','end','text'. Optional 'index' and 'format'.
-        proposed_subs: List[dict] with matching length/order to original. If lengths differ, pairs up to min length.
+        original_subs: Sequence with per-item providing 'start','end','text' via dict keys or attributes.
+        proposed_subs: Sequence with same assumptions. If lengths differ, pairs up to min length.
 
     Returns:
         List[dict]: merged subtitles.
+
+    Notes:
+        - This function defensively normalizes input items using dict(...) only when it's safe;
+          otherwise it falls back to attribute access or treats unknown types as empty dicts.
     """
     # Helper: normalize text into comparable word list (ignore punctuation, whitespace and case).
     def _words(text: Optional[str]) -> List[str]:
         if text is None:
             return []
-        # Lowercase, remove punctuation, split on whitespace.
         cleaned = re.sub(r"[\\W_]+", " ", str(text).lower(), flags=re.UNICODE).strip()
         return [w for w in cleaned.split() if w]
 
@@ -354,18 +358,47 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
         except Exception:
             return float(default)
 
-    # Pair subtitles by index if present and matching, else by order.
-    n = min(len(original_subs or []), len(proposed_subs or []))
+    # Helper: normalize any item (dict/object/None/etc.) into a simple dict.
+    def _norm_item(x: Any) -> Dict[str, Any]:
+        if x is None:
+            return {}
+        # If it's already a mapping-like object, use it as-is (copy to avoid side-effects)
+        if hasattr(x, "get"):
+            try:
+                return dict(x)
+            except Exception:
+                # Fallback to extracting known fields
+                pass
+        # Try attribute-style access
+        out: Dict[str, Any] = {}
+        for k in ("index", "start", "end", "text", "format"):
+            try:
+                if hasattr(x, k):
+                    out[k] = getattr(x, k)
+            except Exception:
+                continue
+        # If still empty and it's a string, treat as text
+        if not out and isinstance(x, str):
+            out["text"] = x
+        return out
+
+    orig_list = list(original_subs or [])
+    prop_list = list(proposed_subs or [])
+
+    # Pair subtitles by position; more advanced matching by index can be added later if needed.
+    n = min(len(orig_list), len(prop_list))
     merged: List[Dict] = []
 
     for i in range(n):
-        o = dict(original_subs[i] or {})
-        p = dict(proposed_subs[i] or {})
+        o_raw = orig_list[i] if i < len(orig_list) else None
+        p_raw = prop_list[i] if i < len(prop_list) else None
+        o = _norm_item(o_raw)
+        p = _norm_item(p_raw)
 
         # Determine index
         idx = o.get("index", p.get("index", i + 1))
 
-        # Current baseline values from original
+        # Baseline values from original
         o_start = _sec(o.get("start"))
         o_end = _sec(o.get("end"), o_start)
         o_text = _normalize_space(o.get("text", ""))
@@ -397,9 +430,9 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
         })
 
     # If original has extra tail items with no proposed pair, keep as-is
-    if len(original_subs or []) > n:
-        for j in range(n, len(original_subs)):
-            o = original_subs[j]
+    if len(orig_list) > n:
+        for j in range(n, len(orig_list)):
+            o = _norm_item(orig_list[j])
             merged.append({
                 "index": int(o.get("index", j + 1)),
                 "start": float(_sec(o.get("start"))),
@@ -409,9 +442,9 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
             })
 
     # If proposed has extra tail items with no original pair, append them (they're effectively new)
-    if len(proposed_subs or []) > n:
-        for j in range(n, len(proposed_subs)):
-            p = proposed_subs[j]
+    if len(prop_list) > n:
+        for j in range(n, len(prop_list)):
+            p = _norm_item(prop_list[j])
             merged.append({
                 "index": int(p.get("index", j + 1)),
                 "start": float(_sec(p.get("start"))),
