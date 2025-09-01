@@ -1,6 +1,13 @@
 """
 Standalone alignment and correction module with optional Gemini LLM integration.
 
+Added advanced correction logic:
+- Best-span search by hybrid similarity (RapidFuzz + embeddings + optional Gemini) with fallback to token Jaccard.
+- Timing snapping: if estimated cue timing deviates from matched transcript span by > timing_delta_seconds (default 0.6s),
+  snap timing into the span respecting min_gap/min_duration and reading speed.
+- Text overwrite: if similarity >= similarity_replace_threshold (default 0.85), replace cue text with transcript span text.
+- Strictness: strict_mode toggles the aggressive snapping/overwrite behavior.
+
 This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
@@ -734,6 +741,12 @@ def align_subtitles_to_transcript(
     default_chars_per_sec: Optional[float] = 15.0,
     max_cue_duration: Optional[float] = 6.0,
     delayed_start_threshold: Optional[float] = 0.5,
+    # New strictness and replacement/timing controls
+    use_gemini_for_similarity: Optional[bool] = True,
+    similarity_replace_threshold: Optional[float] = 0.85,
+    similarity_timing_threshold: Optional[float] = 0.6,
+    timing_delta_seconds: Optional[float] = 0.6,
+    strict_mode: Optional[bool] = True,
 ) -> List[Dict]:
     """
     Align subtitles' start/end timings to a reference transcript as much as possible.
@@ -742,6 +755,20 @@ def align_subtitles_to_transcript(
     - Inputs may contain numeric seconds, strings, or SRT-like timecodes for 'start'/'end'.
     - All inputs are normalized to float seconds internally.
     - The returned list always uses float seconds for 'start' and 'end' (no strings/timecodes).
+
+    Model-guided matching and correction:
+    - For each subtitle cue, select the best-matching transcript span using:
+        * RapidFuzz partial_ratio and token_set_ratio
+        * Optional sentence-transformers cosine similarity (if enable_hybrid=True)
+        * Optional Gemini semantic similarity hint (if GEMINI_ENABLED and use_gemini_for_similarity=True)
+      Combined via weighted hybrid score when hybrid enabled, else Jaccard fallback.
+
+    Thresholds and strictness:
+    - similarity_replace_threshold (default ~0.85): if score >= threshold, aggressively replace cue text with transcript span text.
+    - similarity_timing_threshold (default ~0.6): if score >= threshold, prefer aligning timing tightly to span bounds.
+    - timing_delta_seconds (default ~0.6): if cue's estimated time lies outside this delta from span window, snap/adjust inside.
+    - strict_mode (default True): enables the aggressive timing snapping and replacement policies above.
+    """
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -859,7 +886,7 @@ def align_subtitles_to_transcript(
     model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
 
     # Initialize Gemini client once (optional; requires GEMINI_ENABLED and GEMINI_API_KEY)
-    gemini_client = _init_gemini_client()
+    gemini_client = _init_gemini_client() if use_gemini_for_similarity else None
 
     aligned: List[Dict] = []
     t_idx = 0
@@ -908,6 +935,34 @@ def align_subtitles_to_transcript(
                     shift = est_end - span_end
                     est_end = span_end
                     est_start = max(span_start, est_start - shift)
+
+            # Timing correction policy:
+            # - If cue timing deviates from matched transcript span beyond timing_delta_seconds,
+            #   snap into [span_start, span_end] using estimated reading duration, while preserving min_gap.
+            # - If similarity exceeds similarity_timing_threshold, prefer closer alignment to span even when within delta.
+            if strict_mode:
+                delta_from_span = 0.0
+                try:
+                    # compute how far cue is from span window
+                    delta_from_span = max(0.0, max(span_start - est_start, est_end - span_end))
+                except Exception:
+                    delta_from_span = 0.0
+                if delta_from_span > float(timing_delta_seconds or 0.6) or score >= float(similarity_timing_threshold or 0.6):
+                    # re-center inside span limits with reading time
+                    est_start = max(last_end + min_gap, span_start)
+                    rd = _calc_reading_duration(span_text if score >= (similarity_replace_threshold or 0.85) else sub_text,
+                                                float(default_chars_per_sec), float(min_duration), float(max_cue_duration))
+                    est_end = min(est_start + rd, span_end)
+                    if est_end - est_start < min_duration:
+                        est_end = min(span_end, est_start + min_duration)
+                        if est_end - est_start < min_duration:
+                            est_start = max(span_start, est_end - min_duration)
+
+            # Aggressive text replacement policy:
+            # - If similarity >= similarity_replace_threshold, trust transcript text and replace subtitle text with it.
+            # - Otherwise, keep original subtitle text (downstream text correction will polish it).
+            if score >= float(similarity_replace_threshold or 0.85):
+                new_cue["text"] = span_text
 
             new_cue["start"] = float(est_start)
             new_cue["end"] = float(est_end)
@@ -1002,10 +1057,16 @@ def write_corrected_alignment(
         List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds:
             [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
     """
+    # Use defaults geared towards stronger corrections but still allow hybrid embeddings opt-in by caller.
     aligned_cues = align_subtitles_to_transcript(
         transcript=transcript,
         subtitles=subtitles,
-        enable_hybrid=False,  # pure fuzzy by default to avoid heavy model load unless caller opts in
+        enable_hybrid=False,  # keep fast path unless explicitly requested by orchestrator
+        use_gemini_for_similarity=True,
+        similarity_replace_threshold=0.85,
+        similarity_timing_threshold=0.6,
+        timing_delta_seconds=0.6,
+        strict_mode=True,
     )
 
     # Language note:
