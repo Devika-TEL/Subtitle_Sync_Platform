@@ -493,11 +493,10 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
 
 if __name__ == "__main__":
     """
-    Demo harness for align_subtitles using transcript/subtitles-like inputs to show:
-    - Timestamp threshold behavior (>=1.0s differences update, otherwise keep)
-    - Text difference by words (punctuation/case/whitespace ignored)
+    Demo harness: prints only the final merged/modified subtitles produced by align_subtitles,
+    showing exactly what would be written back to a subtitles file.
     """
-    # transcript and subtitles as per request details
+    # Sample inputs
     transcript = [
         {"start": 0, "end": 2, "text": "Hello world!"},
         {"start": 3, "end": 5, "text": "This is a test."},
@@ -509,23 +508,10 @@ if __name__ == "__main__":
         {"start": 6, "end": 7.9, "text": "Another Line here."},
     ]
 
-    print("=== Demo: align_subtitles (transcript vs subtitles) ===")
-    print("Transcript:")
-    for i, s in enumerate(transcript, start=1):
-        print(f"  T{i}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
-
-    print("\nSubtitles (input):")
-    for i, s in enumerate(subtitles, start=1):
-        print(f"  S{i}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
-
-    # Run alignment: original=transcript, proposed=subtitles (to demonstrate both timestamp and text rules)
+    # Run alignment: original=transcript, proposed=subtitles
     merged = align_subtitles(transcript, subtitles)
 
-    print("\nResult (merged):")
+    # Print only the final result in a clear, readable format
+    print("Resulting subtitles after merge (index start->end | text):")
     for s in merged:
-        print(f"  #{s['index']}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
-
-    print("\nNotes:")
-    print("- Texts like 'Hello world!' vs 'Hello World' share the same words (ignoring punctuation/case) -> original text kept.")
-    print("- Small timestamp differences (<1.0s) are preserved from transcript; >=1.0s would update from subtitles.")
-    print("- Mixed casing 'Another line here.' vs 'Another Line here.' does not trigger a text change due to case insensitivity.")
+        print(f"{s['index']:>3}  {s['start']:.2f} -> {s['end']:.2f} | {s['text']}")
