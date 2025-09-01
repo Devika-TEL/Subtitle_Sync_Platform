@@ -229,9 +229,33 @@ def align_subtitles(
         s_end = _sec(s.get("end"), s_start + 0.01)
         s_text = _normalize_space(s.get("text", ""))
 
-        # Timing correction: if abs diff >= 1.0s, take transcript's
-        start = t_start if abs(t_start - s_start) >= 1.0 else s_start
-        end = t_end if abs(t_end - s_end) >= 1.0 else s_end
+        # Timing correction:
+        # Prefer subtitle timing if it already reasonably overlaps the transcript window
+        # or centers near it. Otherwise, use the transcript timing which is authoritative.
+        # This avoids tiny/near-zero times surviving and later being bunched by monotonic pass.
+        s_iv = (s_start, max(s_end, s_start + 0.01))
+        t_iv = (t_start, max(t_end, t_start + 0.01))
+        ov = _overlap(s_iv, t_iv)
+        s_dur = max(0.01, s_iv[1] - s_iv[0])
+        t_dur = max(0.01, t_iv[1] - t_iv[0])
+        center_diff = abs(_interval_center(s_iv) - _interval_center(t_iv))
+
+        # Heuristics:
+        # - If we have at least 40% overlap and centers within 0.75s, keep subtitle times.
+        # - Else, if absolute difference is quite large (>= 0.75s), adopt transcript times.
+        # - Else, lightly blend by nudging subtitle towards transcript start/end.
+        keep_subtitle = (ov >= 0.4 * min(s_dur, t_dur)) and (center_diff <= 0.75)
+
+        if keep_subtitle:
+            start, end = s_iv
+        else:
+            if center_diff >= 0.75 or abs(t_start - s_start) >= 0.75 or abs(t_end - s_end) >= 0.75:
+                start, end = t_iv
+            else:
+                # Gentle nudge towards transcript if small difference and poor overlap
+                alpha = 0.5
+                start = _safe_time((1 - alpha) * s_iv[0] + alpha * t_iv[0])
+                end = _safe_time(max((1 - alpha) * s_iv[1] + alpha * t_iv[1], start + 0.01))
 
         # Text selection:
         # - If cross-lingual, preserve subtitle text.
@@ -357,7 +381,7 @@ def align_subtitles(
     # Final pass: enforce readable on-screen durations
     # - min_gap: small separation to avoid cues ending and starting at the same instant
     # - min_duration: enforce at least 1.0s so subtitles are visible/readable
-    _ensure_monotonic(merged, min_gap=0.05, min_duration=1.0)
+    _ensure_monotonic(merged, min_gap=0.03, min_duration=0.8)
     return merged
 
 
