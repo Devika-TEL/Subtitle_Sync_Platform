@@ -2,7 +2,7 @@
 Standalone alignment and correction entry point (no FastAPI dependency).
 
 PUBLIC_INTERFACE:
-- write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> str
+- write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> List[Dict]
 
 Inputs:
 - transcript: Whisper-like transcript either as:
@@ -15,8 +15,8 @@ Inputs:
 Behavior:
 - Aligns subtitles to transcript using subtitle_alignment_simple.align_subtitles_to_transcript
 - Applies light text correction for OTT compliance using subtitle_correction.correct_subtitle_text
-- Writes resulting SRT as 'subtitle_alignment_simple.srt' to processed_dir
-- Returns absolute path to the written file
+- Returns corrected subtitles as a list of dicts matching input format
+- Does not write to a file; callers can write if needed using the returned list and _compose_srt.
 
 This is intentionally decoupled from FastAPI, providing a pure-Python callable.
 """
@@ -48,6 +48,10 @@ def _format_seconds_to_srt(seconds: float) -> str:
 
 
 def _compose_srt(cues: List[Dict]) -> str:
+    """
+    Compose an SRT text from a list of cues.
+    Note: This helper is intentionally kept for callers who want to write output themselves.
+    """
     out_lines: List[str] = []
     for i, cue in enumerate(cues, start=1):
         start = _format_seconds_to_srt(float(cue.get("start", 0.0)))
@@ -62,6 +66,9 @@ def _compose_srt(cues: List[Dict]) -> str:
 
 
 def _ensure_processed_dir(processed_dir: Optional[str]) -> Path:
+    """
+    Retained for compatibility; not used by default since this module no longer writes files.
+    """
     if processed_dir:
         p = Path(processed_dir)
     else:
@@ -83,8 +90,8 @@ def write_corrected_alignment(
     *,
     processed_dir: Optional[str] = None,
     language: Optional[str] = None,
-) -> str:
-    """Create corrected, aligned subtitles and write SRT to processed/subtitle_alignment_simple.srt.
+) -> List[Dict]:
+    """Create corrected, aligned subtitles and return them as a list of dicts.
 
     PUBLIC_INTERFACE
     Args:
@@ -98,11 +105,12 @@ def write_corrected_alignment(
             - end: float or timecode string
             - text: str
             - format: str (propagated to output if provided)
-        processed_dir: Optional directory to write output file; defaults to settings.PROCESSED_DIR or ./processed.
+        processed_dir: Deprecated here; retained for signature compatibility (no write happens).
         language: Optional language code guiding light text correction.
 
     Returns:
-        str: Absolute path to the written 'subtitle_alignment_simple.srt' file.
+        List[Dict]: Corrected subtitles in the same structure as input:
+            [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
     """
     # Align using the robust aligner
     settings = None
@@ -140,9 +148,5 @@ def write_corrected_alignment(
         new_cue["text"] = fixed_text
         final_cues.append(new_cue)
 
-    # Compose and write SRT
-    out_dir = _ensure_processed_dir(processed_dir)
-    out_path = out_dir / "subtitle_alignment_simple.srt"
-    srt_text = _compose_srt(final_cues)
-    out_path.write_text(srt_text, encoding="utf-8")
-    return str(out_path)
+    # Return corrected cues; no file writes here.
+    return final_cues
