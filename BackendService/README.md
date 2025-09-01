@@ -42,30 +42,17 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
 
-### Gemini LLM Integration (optional)
+### Local-only Correction and Alignment
 
-We now support optional Gemini (Google Generative AI) usage for transcript-aware subtitle correction within the standalone alignment module.
+The standalone alignment module (BackendService/subtitle_alignment_standalone.py) has been refactored to use only local Python heuristics and optional local libraries. It does not perform any external API calls or require API keys.
 
-Where it’s used:
-- BackendService/subtitle_alignment_standalone.py
-  - Function write_corrected_alignment(...) will attempt an LLM correction pass for each aligned cue if GEMINI_API_KEY is set. If the key is not set or the API call fails, it falls back gracefully to local heuristics and grammar/punctuation fixes.
-
-How to enable:
-- Set the environment variable GEMINI_API_KEY with your real key (do not commit secrets).
-- No code changes required.
+Notes:
+- Transcript-aware alignment uses token-based similarity (and optionally RapidFuzz/sentence-transformers if installed locally).
+- Text correction uses local normalization, optional spaCy entity protection, and language-tool-python where available. If optional packages are missing, it falls back to heuristics.
+- Language support varies with available tokenizers/models. Languages with complex segmentation may see limited improvements under heuristic fallback.
 
 Example (local):
-export GEMINI_API_KEY="your-real-api-key"
 python BackendService/subtitle_alignment_standalone.py
-
-Implementation details:
-- The module uses a minimal requests-based REST call to:
-  https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY
-- Request includes a concise prompt with a transcript excerpt and the current cue text. The LLM is instructed to return ONLY the corrected subtitle text.
-- Safe by default: if requests is not available or any error occurs, the function returns None and the pipeline continues without LLM output.
-
-Security:
-- No secrets are hardcoded. Ensure GEMINI_API_KEY is supplied at runtime via environment or your deployment’s secret manager.
 
 ### Alignment modes and configuration
 
