@@ -42,7 +42,7 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
 
-### Correction and Alignment with Optional Gemini SDK
+### Correction and Alignment (Strict Transcript-Overwrite) with Optional Gemini SDK
 
 The standalone alignment module (BackendService/subtitle_alignment_standalone.py) supports optional integration with the official Google Gemini SDK (google-generativeai). No raw HTTP requests are used—only SDK calls.
 
@@ -52,7 +52,12 @@ Enable Gemini usage by configuring the following environment variables (provided
 - GEMINI_MODEL_NAME=gemini-1.5-flash   # or gemini-1.5-pro, etc.
 
 Behavior:
-- If the SDK is installed and environment is enabled, subtitle text correction may use Gemini for conservative grammar/punctuation improvements while respecting OTT constraints.
+- Alignment: When an alignment is found between a subtitle cue and the transcript, the transcript is the definitive source.
+  - Text is always overwritten with the matched transcript span.
+  - Start/end timestamps are always recalculated based on the transcript span (no delta checks).
+  - Similarity thresholds are permissive to capture even small word differences.
+- Optional diagnostics: When strict_mode=True and verbose logging is enabled, a word-level diff is logged for each changed cue to highlight added/removed tokens.
+- If the Gemini SDK is installed and environment is enabled, subtitle text correction may use Gemini for conservative grammar/punctuation improvements while respecting OTT constraints.
 - Alignment scoring can optionally consult Gemini for a small semantic similarity hint when hybrid mode is enabled.
 - If the SDK is not installed or env is not set, the module continues using only local heuristics.
 
@@ -67,6 +72,10 @@ Notes:
 
 Example (local):
 python BackendService/subtitle_alignment_standalone.py
+
+To enable word-level diff diagnostics in logs:
+- Call write_corrected_alignment(..., strict_mode=True) and pass verbose=True to align_subtitles_to_transcript if using it directly, or provide a logger.
+- Diffs are emitted as a list of tuples: ('=', token) unchanged, ('-', token) removed, ('+', token) added.
 
 ### Alignment modes and configuration
 
