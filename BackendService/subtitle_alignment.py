@@ -493,112 +493,39 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
 
 if __name__ == "__main__":
     """
-    Demo harness for align_subtitles.
-
-    This demo validates:
-    1) Timestamp updates:
-       - Cue 1: proposed start/end differ by < 1.0s -> keep original times.
-       - Cue 2: proposed start differs by >= 1.0s -> update times from proposed.
-    2) Text updates ignoring punctuation/case/whitespace:
-       - Cue 1: "Hello, World!" vs " hello world " -> same words -> keep original text.
-       - Cue 2: "This is a test" vs "This is a different test" -> words differ -> update text.
-    3) Robust index handling and length mismatch:
-       - proposed[0] provides index as a callable (simulating pathological attr like list.index) -> fallback to positional index.
-       - Extra original item without a proposed pair is kept.
-       - Extra proposed item without an original pair is appended.
-
-    Prints the merged results to stdout.
+    Demo harness for align_subtitles using transcript/subtitles-like inputs to show:
+    - Timestamp threshold behavior (>=1.0s differences update, otherwise keep)
+    - Text difference by words (punctuation/case/whitespace ignored)
     """
-    # Hardcoded sample inputs
-    original_subs = [
-        {
-            "index": 1,
-            "start": 0.0,
-            "end": 2.0,
-            "text": "Hello, World!",
-            "format": "srt",
-        },
-        {
-            "index": 2,
-            "start": 3.0,
-            "end": 5.0,
-            "text": "This is a test",
-            "format": "srt",
-        },
-        # Extra original item with no proposed counterpart
-        {
-            "index": 3,
-            "start": 6.0,
-            "end": 8.0,
-            "text": "Orphan original stays",
-            "format": "srt",
-        },
+    # transcript and subtitles as per request details
+    transcript = [
+        {"start": 0, "end": 2, "text": "Hello world!"},
+        {"start": 3, "end": 5, "text": "This is a test."},
+        {"start": 6, "end": 8, "text": "Another line here."},
+    ]
+    subtitles = [
+        {"start": 0, "end": 2, "text": "Hello World"},
+        {"start": 3, "end": 4.3, "text": "This is a test!"},
+        {"start": 6, "end": 7.9, "text": "Another Line here."},
     ]
 
-    class WeirdIndex:
-        # Simulate an object whose 'index' attribute is callable (like list.index),
-        # which should be ignored and fallback to positional index.
-        def __init__(self, start, end, text):
-            self.index = list.index  # callable on purpose
-            self.start = start
-            self.end = end
-            self.text = text
-            self.format = "srt"
+    print("=== Demo: align_subtitles (transcript vs subtitles) ===")
+    print("Transcript:")
+    for i, s in enumerate(transcript, start=1):
+        print(f"  T{i}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
 
-    proposed_subs = [
-        # Cue 1: Less than 1s diff in times; text differs only by punctuation/case/whitespace -> keep original text and times
-        {
-            "index": 1,
-            "start": 0.4,  # diff 0.4s from original 0.0s (<1s) -> keep original
-            "end": 2.4,    # diff 0.4s from original 2.0s (<1s) -> keep original
-            "text": "   hello   world   ",  # same words as "Hello, World!"
-            "format": "srt",
-        },
-        # Cue 2: Index as callable via WeirdIndex; Start shifted by >=1s -> update times; text has different word -> update text
-        WeirdIndex(
-            start=4.2,  # diff 1.2s from original 3.0s (>=1s) -> update from proposed
-            end=6.8,    # diff 1.8s from original 5.0s (>=1s) -> update from proposed
-            text="This is a different test",
-        ),
-        # Extra proposed item without original pair (will be appended)
-        {
-            "index": 99,
-            "start": 9.5,
-            "end": 11.0,
-            "text": "New proposed only",
-            "format": "srt",
-        },
-    ]
+    print("\nSubtitles (input):")
+    for i, s in enumerate(subtitles, start=1):
+        print(f"  S{i}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
 
-    print("=== Demo: align_subtitles ===")
-    print("Original subtitles:")
-    for s in original_subs:
+    # Run alignment: original=transcript, proposed=subtitles (to demonstrate both timestamp and text rules)
+    merged = align_subtitles(transcript, subtitles)
+
+    print("\nResult (merged):")
+    for s in merged:
         print(f"  #{s['index']}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r}")
 
-    print("\nProposed subtitles:")
-    for i, s in enumerate(proposed_subs, start=1):
-        # Normalize for printing
-        if hasattr(s, "__dict__"):
-            start = getattr(s, "start", 0.0)
-            end = getattr(s, "end", start)
-            text = getattr(s, "text", "")
-            idx = getattr(s, "index", i)
-            fmt = getattr(s, "format", "srt")
-        else:
-            start = s.get("start", 0.0)
-            end = s.get("end", start)
-            text = s.get("text", "")
-            idx = s.get("index", i)
-            fmt = s.get("format", "srt")
-        print(f"  #{idx}: {float(start):.2f}-{float(end):.2f} | {text!r} (fmt={fmt})")
-
-    merged = align_subtitles(original_subs, proposed_subs)
-
-    print("\nMerged subtitles:")
-    for s in merged:
-        print(f"  #{s['index']}: {s['start']:.2f}-{s['end']:.2f} | {s['text']!r} (fmt={s.get('format','srt')})")
-
-    print("\nExpectations:")
-    print("- Cue 1 times unchanged (0.00-2.00) and text stays 'Hello, World!' (not replaced by punctuation/case-only change).")
-    print("- Cue 2 times updated to ~4.20-6.80 and text becomes 'This is a different test'.")
-    print("- Cue 3 (orphan original) preserved; extra proposed appended as final cue with its own times/text.")
+    print("\nNotes:")
+    print("- Texts like 'Hello world!' vs 'Hello World' share the same words (ignoring punctuation/case) -> original text kept.")
+    print("- Small timestamp differences (<1.0s) are preserved from transcript; >=1.0s would update from subtitles.")
+    print("- Mixed casing 'Another line here.' vs 'Another Line here.' does not trigger a text change due to case insensitivity.")
