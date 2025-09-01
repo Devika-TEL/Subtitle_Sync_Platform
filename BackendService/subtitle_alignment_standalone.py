@@ -1,13 +1,6 @@
 """
 Standalone alignment and correction module with optional Gemini LLM integration.
 
-Added advanced correction logic:
-- Best-span search by hybrid similarity (RapidFuzz + embeddings + optional Gemini) with fallback to token Jaccard.
-- Timing snapping: if estimated cue timing deviates from matched transcript span by > timing_delta_seconds (default 0.6s),
-  snap timing into the span respecting min_gap/min_duration and reading speed.
-- Text overwrite: when alignment is found, subtitle text is replaced by the matched transcript text (strict overwrite).
-- Strictness: strict_mode toggles optional diagnostics (e.g., word-level diff logging); overwrite is default for any alignment.
-
 This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
@@ -42,8 +35,8 @@ Gemini integration:
 - All Gemini usage is optional and guarded; local heuristics remain the default behavior.
 
 PUBLIC_INTERFACE:
-- write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None, strict_mode=True) -> List[Dict]
-  Create corrected, aligned subtitles and return as list of dicts (no file I/O). When alignment is found, transcript always wins for text and timings.
+- write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> List[Dict]
+  Create corrected, aligned subtitles and return as list of dicts (no file I/O)
 """
 
 from __future__ import annotations
@@ -281,40 +274,6 @@ def _lazy_st_model_loader(model_name: str) -> Callable[[], Any]:
         return model_ref["model"]
 
     return _load
-
-
-def _word_level_diff(original: str, new: str) -> List[Tuple[str, str]]:
-    """
-    Compute a simple word-level diff between original and new strings.
-
-    Returns:
-        List of tuples (status, token):
-            - ('=', token) for unchanged
-            - ('-', token) for removed
-            - ('+', token) for added
-
-    Note: Lightweight heuristic using difflib; for detailed auditing only.
-    """
-    import difflib
-    a = original.split()
-    b = new.split()
-    out: List[Tuple[str, str]] = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b).get_opcodes():
-        if tag == 'equal':
-            for t in a[i1:i2]:
-                out.append(('=', t))
-        elif tag == 'delete':
-            for t in a[i1:i2]:
-                out.append(('-', t))
-        elif tag == 'insert':
-            for t in b[j1:j2]:
-                out.append(('+', t))
-        elif tag == 'replace':
-            for t in a[i1:i2]:
-                out.append(('-', t))
-            for t in b[j1:j2]:
-                out.append(('+', t))
-    return out
 
 
 def _embedding_cosine(a: str, b: str, model_loader: Optional[Callable[[], Any]]) -> float:
@@ -763,7 +722,7 @@ def align_subtitles_to_transcript(
     subtitles: List[Dict],
     *,
     max_span: int = 5,
-    min_similarity: float = 0.05,  # Lowered to be maximally permissive
+    min_similarity: float = 0.2,
     min_duration: float = 0.4,
     min_gap: float = 0.02,
     verbose: bool = False,
@@ -775,30 +734,14 @@ def align_subtitles_to_transcript(
     default_chars_per_sec: Optional[float] = 15.0,
     max_cue_duration: Optional[float] = 6.0,
     delayed_start_threshold: Optional[float] = 0.5,
-    # Controls (kept for compatibility; not used for gating overwrite anymore)
-    use_gemini_for_similarity: Optional[bool] = True,
-    similarity_replace_threshold: Optional[float] = 0.0,  # ignored; transcript always overwrites when aligned
-    similarity_timing_threshold: Optional[float] = 0.0,  # ignored; timestamps always updated when aligned
-    timing_delta_seconds: Optional[float] = 0.0,        # ignored; delta not checked
-    strict_mode: Optional[bool] = True,
 ) -> List[Dict]:
     """
-    Align subtitles to a reference transcript, enforcing transcript as the authoritative source.
+    Align subtitles' start/end timings to a reference transcript as much as possible.
 
-    New behavior:
-    - Whenever an alignment span is found (score >= min_similarity), ALWAYS:
-      a) Replace subtitle text with the exact matched transcript span text.
-      b) Update start/end timestamps based on the matched transcript span, ignoring any previous delta checks.
-
-    Additional features:
-    - Word-level diff logging is available when a logger is provided and strict_mode=True.
-      This highlights individual token removals/additions between the original cue and the transcript span.
-      To enable: pass verbose=True and a logger, or rely on the internal logger creation by setting verbose=True.
-
-    Notes:
-    - min_similarity is lowered to be permissive, but still prevents completely unrelated mappings.
-    - Non-overlap and minimum duration are enforced at the end of processing.
-    """
+    Contract:
+    - Inputs may contain numeric seconds, strings, or SRT-like timecodes for 'start'/'end'.
+    - All inputs are normalized to float seconds internally.
+    - The returned list always uses float seconds for 'start' and 'end' (no strings/timecodes).
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -916,7 +859,7 @@ def align_subtitles_to_transcript(
     model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
 
     # Initialize Gemini client once (optional; requires GEMINI_ENABLED and GEMINI_API_KEY)
-    gemini_client = _init_gemini_client() if use_gemini_for_similarity else None
+    gemini_client = _init_gemini_client()
 
     aligned: List[Dict] = []
     t_idx = 0
@@ -946,27 +889,26 @@ def align_subtitles_to_transcript(
             span_text = _merge_texts(span)
             span_start, span_end = _span_time(span)
 
-            # Always base timing on transcript span when aligned, ignoring delta/thresholds
             last_end = aligned[-1]["end"] if aligned else 0.0
-            est_start = max(span_start, last_end + float(min_gap))
-            # Use transcript text to compute reading duration; clamp inside span
-            rd = _calc_reading_duration(span_text, float(default_chars_per_sec), float(min_duration), float(max_cue_duration))
-            est_end = min(span_end, est_start + rd)
-            if est_end - est_start < float(min_duration):
-                # ensure minimum duration inside span if possible
-                est_end = min(span_end, est_start + float(min_duration))
-                if est_end - est_start < float(min_duration):
-                    est_start = max(span_start, est_end - float(min_duration))
+            est_start, est_end = _distribute_time_within_span_with_delayed_fix(
+                sub_text=sub_text,
+                span_text=span_text,
+                span_start=span_start,
+                span_end=span_end,
+                last_end=float(last_end),
+                min_gap=float(min_gap),
+                min_duration=float(min_duration),
+                max_duration=float(max_cue_duration),
+                chars_per_sec=float(default_chars_per_sec),
+                delay_threshold=float(delayed_start_threshold),
+            )
+            if est_end - est_start < min_duration:
+                est_end = est_start + min_duration
+                if est_end > span_end:
+                    shift = est_end - span_end
+                    est_end = span_end
+                    est_start = max(span_start, est_start - shift)
 
-            # Always overwrite text with transcript when alignment is found
-            if strict_mode and _logger is not None:
-                # Optional word-level diff logging for diagnostics
-                diffs = _word_level_diff(sub_text, span_text)
-                changed = any(tag != '=' for tag, _ in diffs)
-                if changed:
-                    _logger.info("Word-level diff (cue=%d): %s", cue_idx, json.dumps(diffs, ensure_ascii=False))
-
-            new_cue["text"] = span_text
             new_cue["start"] = float(est_start)
             new_cue["end"] = float(est_end)
             t_idx = max(t_idx, j)
@@ -1038,7 +980,6 @@ def write_corrected_alignment(
     *,
     processed_dir: Optional[str] = None,  # retained for signature compatibility; not used
     language: Optional[str] = None,
-    strict_mode: Optional[bool] = True,
 ) -> List[Dict]:
     """Create corrected, aligned subtitles and return them as a list of dicts.
 
@@ -1061,17 +1002,10 @@ def write_corrected_alignment(
         List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds:
             [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
     """
-    # Use defaults geared towards stronger corrections; transcript always overwrites when aligned.
     aligned_cues = align_subtitles_to_transcript(
         transcript=transcript,
         subtitles=subtitles,
-        enable_hybrid=False,  # keep fast path unless explicitly requested by orchestrator
-        use_gemini_for_similarity=True,
-        similarity_replace_threshold=0.0,     # ignored; kept for compatibility
-        similarity_timing_threshold=0.0,      # ignored
-        timing_delta_seconds=0.0,             # ignored
-        strict_mode=bool(strict_mode),
-        min_similarity=0.05,                  # permissive to capture small variants (e.g., "dried" vs "dead")
+        enable_hybrid=False,  # pure fuzzy by default to avoid heavy model load unless caller opts in
     )
 
     # Language note:
