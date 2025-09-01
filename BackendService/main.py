@@ -41,7 +41,7 @@ from subtitle_processor import (
 )
 from subtitle_correction import apply_additional_compliance_fixes
 from job_processor import JobQueue, JobStatus
-from subtitle_alignment_endpoint import align_and_correct_from_files
+# Removed transcript alignment endpoint to decouple from web layer.
 
 # Initialize FastAPI app with metadata and tags for OpenAPI docs
 app = FastAPI(
@@ -382,52 +382,7 @@ def websocket_usage_note():
     return {"websocket": "not-available", "strategy": "use /jobs/{job_id} polling for updates."}
 
 
-@app.post(
-    "/subtitles/align-with-transcript",
-    tags=["subtitles"],
-    summary="Align and correct subtitles using a provided transcript",
-    description="Upload an SRT subtitle file and provide a transcript (JSON or plain text). The service aligns timestamps, fixes overlaps and missing durations, performs light text correction, and writes 'subtitle_alignment_simple.srt' to the processed directory. Returns the relative file path.",
-)
-# PUBLIC_INTERFACE
-async def align_with_transcript_endpoint(
-    subtitle_file: UploadFile = File(..., description="Subtitle file (SRT) to align and correct"),
-    transcript: str = Form(..., description="Transcript content as JSON (preferred) or plain text"),
-    language: Optional[str] = Form(None, description="Optional language code to guide text correction"),
-):
-    """Align an uploaded SRT against a provided transcript and write 'subtitle_alignment_simple.srt'.
 
-    Parameters:
-        - subtitle_file: SRT file to process.
-        - transcript: Transcript content. If JSON:
-            * Either a dict with 'segments': [{'text','start','end'}, ...]
-            * Or a list of {'text','start','end'} items
-          If plain text, naive sentence-based segmentation is applied with heuristic timings.
-        - language: Optional language code for text correction.
-
-    Returns:
-        JSON with 'result_files': [relative_path] for retrieving via GET /files/{filename}
-    """
-    if not allowed_subtitle_extension(subtitle_file.filename):
-        raise HTTPException(status_code=400, detail="Unsupported subtitle file extension.")
-    # Only SRT is guaranteed; others can be extended later
-    if Path(subtitle_file.filename or "").suffix.lower() not in {".srt"}:
-        raise HTTPException(status_code=400, detail="Only SRT is supported for this endpoint at the moment.")
-
-    # Save upload to uploads dir
-    sub_path = _save_upload(subtitle_file, settings.UPLOAD_DIR)
-
-    def job_fn():
-        out_abs = align_and_correct_from_files(
-            transcript_content=transcript,
-            subtitle_path=str(sub_path),
-            language=language,
-            processed_dir=str(settings.PROCESSED_DIR),
-        )
-        # Return path relative to processed dir for download
-        return [os.path.relpath(out_abs, settings.PROCESSED_DIR)]
-
-    job_id = job_queue.enqueue(job_fn, description="align_with_transcript", meta={"language": language})
-    return JobResponse(job_id=job_id, status=JobStatus.QUEUED.value)
 
 
 @app.get(
