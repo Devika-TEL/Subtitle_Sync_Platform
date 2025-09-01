@@ -276,23 +276,62 @@ def align_subtitles(transcript_subs: List[Dict], subtitle_subs: List[Dict]) -> L
 
 if __name__ == "__main__":
     """
-    Demo harness: prints only the final merged/modified subtitles produced by align_subtitles,
-    showing exactly what would be written back to a subtitles file.
+    Demo harness: after aligning, print ONLY the subtitles that required modification
+    compared to the original subtitles, based on:
+      - timing change (start or end) of >= 1.0 second, or
+      - any text change (case/punctuation/spacing/words).
+    Unchanged subtitles are omitted from output.
     """
     # Sample inputs: transcript is authoritative
     transcript = [
         {"start": 0, "end": 2, "text": "Hello world!"},
-        {"start": 3, "end": 5, "text": "This is a test."},
+        {"start": 2.9, "end": 5, "text": "This is a test."},
         {"start": 6, "end": 8, "text": "Another line here."},
     ]
-    subtitles = [
-        {"start": 5, "end": 7, "text": "Hello World"},
+    # Keep a copy of the original subtitles for comparison
+    original_subtitles = [
+        {"start": 5, "end": 7, "text": "Hello Would"},
         {"start": 3, "end": 4.3, "text": "This is a test!"},
         {"start": 6, "end": 7.9, "text": "Another Lion here."},
     ]
+    # Work copy for processing
+    subtitles = [dict(item) for item in original_subtitles]
 
     merged = align_subtitles(transcript, subtitles)
 
-    print("Resulting subtitles after merge (index start->end | text):")
-    for s in merged:
-        print(f"{s['index']:>3}  {s['start']:.2f} -> {s['end']:.2f} | {s['text']}")
+    # Determine and print only modified subtitles
+    print("Modified subtitles (index start->end | text):")
+    # We compare by position (index-based pairing prior to reindexing), using min length
+    n = min(len(original_subtitles), len(merged))
+    any_printed = False
+    for i in range(n):
+        orig = original_subtitles[i]
+        new = merged[i]
+
+        # Compare text with normalization similar to align_subtitles
+        def _norm(txt: str) -> str:
+            return re.sub(r"\s+", " ", (txt or "")).strip()
+
+        text_changed = _norm(orig.get("text", "")) != _norm(new.get("text", ""))
+
+        # Timing difference threshold comparison
+        orig_start = float(orig.get("start", 0.0))
+        orig_end = float(orig.get("end", orig_start + 0.01))
+        new_start = float(new.get("start", 0.0))
+        new_end = float(new.get("end", new_start + 0.01))
+
+        timing_changed = (abs(orig_start - new_start) >= 1.0) or (abs(orig_end - new_end) >= 1.0)
+
+        if text_changed or timing_changed:
+            any_printed = True
+            print(f"{new['index']:>3}  {new_start:.2f} -> {new_end:.2f} | {new['text']}")
+
+    # If there are extra items (either transcript or subtitles longer), they are considered "added/changed"
+    if len(merged) > n:
+        any_printed = True
+        for j in range(n, len(merged)):
+            s = merged[j]
+            print(f"{s['index']:>3}  {s['start']:.2f} -> {s['end']:.2f} | {s['text']}")
+
+    if not any_printed:
+        print("(no modifications)")
