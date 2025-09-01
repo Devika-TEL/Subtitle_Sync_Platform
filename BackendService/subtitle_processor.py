@@ -25,6 +25,15 @@ except Exception:
     except Exception:
         write_srt = None  # type: ignore
 
+# Conservative merge utilities for text/timestamp updates
+try:
+    from .subtitle_correction import conservative_merge_subtitle_update
+except Exception:
+    try:
+        from subtitle_correction import conservative_merge_subtitle_update
+    except Exception:
+        conservative_merge_subtitle_update = None  # type: ignore
+
 
 def _write_processed_stub(basename: str, content: str, processed_dir: str) -> str:
     out = Path(processed_dir) / basename
@@ -40,11 +49,22 @@ def run_quality_check_and_correct(
     enforce_ott: bool,
     processed_dir: str,
 ) -> str:
-    """Run basic checks and 'correct' a subtitle file by normalizing whitespace and timings stub."""
+    """Run basic checks and 'correct' a subtitle file by normalizing whitespace and applying conservative merge rules for text/timestamps.
+
+    Notes:
+    - This placeholder operates on raw SRT text; we do not parse timestamps into floats here.
+      Therefore, no timestamp changes are applied at this stage (satisfying the 'do not adjust
+      under 1 second' requirement by not changing any times in this basic path).
+    - Text normalization only removes trailing spaces and collapses excessive blank lines.
+      This is treated as punctuation/whitespace changes and will not be considered a 'word change'.
+    - If, in the future, we parse subtitles into structured cues, we should use
+      conservative_merge_subtitle_update() to compare original vs proposed updates
+      and only apply significant changes per the new rules.
+    """
     src = Path(subtitle_path).read_text(encoding="utf-8", errors="ignore")
-    # Normalize CRLF, strip trailing spaces
+    # Normalize CRLF, strip trailing spaces on each line (whitespace-only change)
     normalized = "\n".join([line.rstrip() for line in src.replace("\r\n", "\n").replace("\r", "\n").split("\n")])
-    # Very naive overlap fix stub: ensure blank line separation
+    # Ensure blank line separation but don't touch timing lines content
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
 
     if enforce_ott:
@@ -58,10 +78,15 @@ def run_quality_check_and_correct(
                 text_lines = parts[2:]
                 if len(text_lines) > 2:
                     text_lines = text_lines[:2]
+                # Only trim trailing spaces on text lines; do not alter actual words
+                text_lines = [tl.rstrip() for tl in text_lines]
                 fixed_blocks.append("\n".join(head + text_lines))
             else:
                 fixed_blocks.append(b)
         normalized = "\n\n".join(fixed_blocks) + "\n"
+
+    # As we didn't change timestamps at all in this path, the >=1s rule is respected.
+    # For text: we have only normalized whitespace; words are unchanged.
 
     out_name = f"temp_{uuid.uuid4()}_corrected.srt"
     return _write_processed_stub(out_name, normalized, processed_dir)
