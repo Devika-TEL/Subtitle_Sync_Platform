@@ -323,28 +323,23 @@ def _refit_times_to_segment(sub: Dict, seg: Dict, *, min_dur: float = 0.5) -> No
 # PUBLIC_INTERFACE
 def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> List[Dict]:
     """
-    Merge two subtitle lists (original and proposed) applying strict rules, robustly handling
-    list/dict or arbitrary objects for items to avoid KeyError/TypeError.
+    Merge two subtitle lists (original and proposed) with clear, thresholded corrections.
 
-    - Timestamps (start/end) are updated only if the absolute difference between
+    Rules enforced:
+    - Timestamps (start/end) are updated only when the absolute difference between
       original and proposed is >= 1.0 second.
-    - Text is updated only if the words actually differ, ignoring punctuation,
-      whitespace, and case.
-    - The output preserves ordering by index if available, otherwise by list position.
-    - Returns the merged/corrected list of subtitles (dicts with index, start, end, text, format).
-
-    Parameters:
-        original_subs: Sequence with per-item providing 'start','end','text' via dict keys or attributes.
-        proposed_subs: Sequence with same assumptions. If lengths differ, pairs up to min length.
+    - Subtitle text is updated only when genuine word differences exist ignoring case,
+      punctuation, and extra whitespace (e.g., "lion" vs "line" will be corrected).
+    - Output ordering is preserved based on original order; indices are sanitized and
+      then re-assigned sequentially to ensure 1..N.
 
     Returns:
-        List[dict]: merged subtitles.
+        List[dict]: subtitles with fields: index, start, end, text, format.
 
-    Notes:
-        - This function defensively normalizes input items using dict(...) only when it's safe;
-          otherwise it falls back to attribute access or treats unknown types as empty dicts.
+    This function is intentionally simple and deterministic for the demo use case,
+    and performs a final monotonic timing cleanup to ensure no overlaps.
     """
-    # Helper: normalize text into comparable word list (ignore punctuation, whitespace and case).
+    # Helper: normalize text into comparable word list (ignore punctuation, whitespace, and case).
     def _words(text: Optional[str]) -> List[str]:
         if text is None:
             return []
@@ -362,14 +357,11 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
     def _norm_item(x: Any) -> Dict[str, Any]:
         if x is None:
             return {}
-        # If it's already a mapping-like object, use it as-is (copy to avoid side-effects)
         if hasattr(x, "get"):
             try:
                 return dict(x)
             except Exception:
-                # Fallback to extracting known fields
                 pass
-        # Try attribute-style access
         out: Dict[str, Any] = {}
         for k in ("index", "start", "end", "text", "format"):
             try:
@@ -377,7 +369,6 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
                     out[k] = getattr(x, k)
             except Exception:
                 continue
-        # If still empty and it's a string, treat as text
         if not out and isinstance(x, str):
             out["text"] = x
         return out
@@ -385,108 +376,91 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
     orig_list = list(original_subs or [])
     prop_list = list(proposed_subs or [])
 
-    # Pair subtitles by position; more advanced matching by index can be added later if needed.
     n = min(len(orig_list), len(prop_list))
     merged: List[Dict] = []
 
     for i in range(n):
-        o_raw = orig_list[i] if i < len(orig_list) else None
-        p_raw = prop_list[i] if i < len(prop_list) else None
-        o = _norm_item(o_raw)
-        p = _norm_item(p_raw)
+        o = _norm_item(orig_list[i])
+        p = _norm_item(prop_list[i])
 
-        # Determine index, ensuring it's an integer value and not a callable/method.
-        # Some upstream data structures might have an attribute named 'index'
-        # that is a method (like list.index). Guard against callables and coerce safely.
+        # Determine safe integer index
         raw_idx = o.get("index", p.get("index", i + 1))
         if callable(raw_idx):
-            # Fall back to positional index if 'index' field is a method/callable
-            safe_idx = i + 1
+            idx = i + 1
         else:
             try:
-                safe_idx = int(raw_idx)
+                idx = int(raw_idx)
             except Exception:
-                safe_idx = i + 1
-        idx = safe_idx
+                idx = i + 1
 
-        # Baseline values from original
+        # Baseline from original
         o_start = _sec(o.get("start"))
-        o_end = _sec(o.get("end"), o_start)
+        o_end = _sec(o.get("end"), o_start + 0.01)
         o_text = _normalize_space(o.get("text", ""))
 
-        # Proposed values
+        # Proposed
         p_start = _sec(p.get("start"), o_start)
-        p_end = _sec(p.get("end"), p_start)
+        p_end = _sec(p.get("end"), p_start + 0.01)
         p_text = _normalize_space(p.get("text", ""))
 
-        # Decide start/end updates: only if absolute diff >= 1.0s
-        start = o_start if abs(p_start - o_start) < 1.0 else p_start
-        end = o_end if abs(p_end - o_end) < 1.0 else p_end
+        # Update times only if |diff| >= 1.0s
+        start = p_start if abs(p_start - o_start) >= 1.0 else o_start
+        end = p_end if abs(p_end - o_end) >= 1.0 else o_end
 
-        # Ensure non-negative and end > start minimally
+        # Sanity: non-negative and end > start
         start = _safe_time(start)
         end = max(_safe_time(end), start + 0.01)
 
-        # Decide text updates: only if word lists differ
+        # Update text only when genuine word difference exists
         o_words = _words(o_text)
         p_words = _words(p_text)
         text = p_text if o_words != p_words else o_text
 
         merged.append({
-            "index": int(idx),
+            "index": idx,
             "start": float(start),
             "end": float(end),
             "text": text,
             "format": o.get("format", p.get("format", "srt")),
         })
 
-    # If original has extra tail items with no proposed pair, keep as-is
+    # Handle tails if lists differ in length
     if len(orig_list) > n:
         for j in range(n, len(orig_list)):
             o = _norm_item(orig_list[j])
-            # Ensure safe integer index for orphan original items as well
-            o_idx_raw = o.get("index", j + 1)
-            if callable(o_idx_raw):
-                o_idx = j + 1
-            else:
-                try:
-                    o_idx = int(o_idx_raw)
-                except Exception:
-                    o_idx = j + 1
+            raw = o.get("index", j + 1)
+            try:
+                idx = int(raw) if not callable(raw) else j + 1
+            except Exception:
+                idx = j + 1
             merged.append({
-                "index": o_idx,
-                "start": float(_sec(o.get("start"))),
-                "end": float(_sec(o.get("end"), _sec(o.get("start")) + 0.01)),
+                "index": idx,
+                "start": float(_safe_time(_sec(o.get("start")))),
+                "end": float(max(_safe_time(_sec(o.get("end"), _sec(o.get("start")))), _safe_time(_sec(o.get("start"))) + 0.01)),
                 "text": _normalize_space(o.get("text", "")),
                 "format": o.get("format", "srt"),
             })
 
-    # If proposed has extra tail items with no original pair, append them (they're effectively new)
     if len(prop_list) > n:
         for j in range(n, len(prop_list)):
             p = _norm_item(prop_list[j])
-            # Ensure safe integer index for orphan proposed items as well
-            p_idx_raw = p.get("index", j + 1)
-            if callable(p_idx_raw):
-                p_idx = j + 1
-            else:
-                try:
-                    p_idx = int(p_idx_raw)
-                except Exception:
-                    p_idx = j + 1
+            raw = p.get("index", j + 1)
+            try:
+                idx = int(raw) if not callable(raw) else j + 1
+            except Exception:
+                idx = j + 1
             merged.append({
-                "index": p_idx,
-                "start": float(_sec(p.get("start"))),
-                "end": float(_sec(p.get("end"), _sec(p.get("start")) + 0.01)),
+                "index": idx,
+                "start": float(_safe_time(_sec(p.get("start")))),
+                "end": float(max(_safe_time(_sec(p.get("end"), _sec(p.get("start")))), _safe_time(_sec(p.get("start"))) + 0.01)),
                 "text": _normalize_space(p.get("text", "")),
                 "format": p.get("format", "srt"),
             })
 
-    # Reindex sequentially to guarantee 1..N order and sort by original order
+    # Reindex cleanly and ensure monotonic minimal constraints
     for k, s in enumerate(merged, start=1):
         s["index"] = k
 
-    # Final monotonic check with minimal duration to avoid overlap issues
     _ensure_monotonic(merged, min_gap=0.0, min_duration=0.01)
     return merged
 
@@ -503,12 +477,13 @@ if __name__ == "__main__":
         {"start": 6, "end": 8, "text": "Another line here."},
     ]
     subtitles = [
-        {"start": 0, "end": 2, "text": "Hello World"},
+        {"start": 5, "end": 7, "text": "Hello World"},
         {"start": 3, "end": 4.3, "text": "This is a test!"},
-        {"start": 6, "end": 7.9, "text": "Another Line here."},
+        {"start": 6, "end": 7.9, "text": "Another Lion here."},
     ]
 
     # Run alignment: original=transcript, proposed=subtitles
+    # Note: Timestamps update only if difference >= 1.0s; text updates only on real word changes.
     merged = align_subtitles(transcript, subtitles)
 
     # Print only the final result in a clear, readable format
