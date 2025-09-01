@@ -10,6 +10,8 @@ Fix summary:
 - Adjusted the monotonic enforcement to reference the latest anchor end rather than naïve `last_end`, applying only minimal forward shifts.
 - Softened the final global monotonic pass (smaller min_gap) to avoid unnecessary broad movements after per-cue adjustments.
 - Added guardrails for sparse/short transcripts to avoid aggressive refits.
+- New: Prevent early display by clamping cue starts to the transcript segment start when a cue leads by >120ms, both during per-cue selection and in a final sync pass.
+- New: Added diagnostics [align:lead-clamp] and [align:post-sync] to trace when cues are adjusted to avoid leading the transcript.
 
 Testing:
 - Added tests in BackendService/tests/test_subtitle_alignment.py:

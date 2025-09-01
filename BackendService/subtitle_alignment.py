@@ -247,7 +247,19 @@ def align_subtitles(
         keep_subtitle = (ov >= 0.4 * min(s_dur, t_dur)) and (center_diff <= 0.75)
 
         if keep_subtitle:
-            start, end = s_iv
+            # If the subtitle starts before the transcript (leading), clamp its start to the transcript start
+            # This prevents cues from appearing before speech onset.
+            s_start_adj = s_iv[0]
+            s_end_adj = s_iv[1]
+            if s_iv[0] + 0.12 < t_iv[0]:  # >120ms early lead vs transcript start
+                print(f"[align:lead-clamp] #{idx} start {s_iv[0]:.2f} -> {t_iv[0]:.2f} (subtitle leads transcript start)")
+                s_start_adj = t_iv[0]
+                # Keep at least a minimal readable duration but do not force extending beyond original end unless needed
+                s_end_adj = max(s_end_adj, s_start_adj + 0.4)
+                # Avoid exceeding transcript end by large margin; allow up to 0.5s tail when users prefer longer reading
+                if s_end_adj > t_iv[1] + 0.5:
+                    s_end_adj = min(s_end_adj, t_iv[1] + 0.5)
+            start, end = s_start_adj, s_end_adj
         else:
             if center_diff >= 0.75 or abs(t_start - s_start) >= 0.75 or abs(t_end - s_end) >= 0.75:
                 start, end = t_iv
@@ -381,6 +393,27 @@ def align_subtitles(
     # Final pass: enforce readable on-screen durations
     # - min_gap: small separation to avoid cues ending and starting at the same instant
     # - min_duration: enforce at least 1.0s so subtitles are visible/readable
+    _ensure_monotonic(merged, min_gap=0.03, min_duration=0.8)
+
+    # Diagnostics-driven sync: ensure no cue leads its transcript counterpart (index-paired)
+    # This prevents early display when transcript starts later.
+    for i in range(min(len(transcript), len(merged))):
+        t = transcript[i]
+        s = merged[i]
+        try:
+            t_start = float(_get_seg_value(t, "start", 0.0))
+            t_end = float(_get_seg_value(t, "end", t_start + 0.01))
+        except Exception:
+            t_start, t_end = 0.0, 0.01
+        if s["start"] + 0.12 < t_start:
+            before = (s["start"], s["end"])
+            s["start"] = t_start
+            # Keep readable duration; don't exceed transcript end by too much
+            s["end"] = max(s["end"], s["start"] + 0.4)
+            if s["end"] > t_end + 0.5:
+                s["end"] = min(s["end"], t_end + 0.5)
+            print(f"[align:post-sync] #{s.get('index','?')} {before[0]:.2f}-{before[1]:.2f} -> {s['start']:.2f}-{s['end']:.2f} (snap to transcript start)")
+    # Re-ensure monotonic after adjustments
     _ensure_monotonic(merged, min_gap=0.03, min_duration=0.8)
     return merged
 
