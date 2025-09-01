@@ -395,8 +395,19 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
         o = _norm_item(o_raw)
         p = _norm_item(p_raw)
 
-        # Determine index
-        idx = o.get("index", p.get("index", i + 1))
+        # Determine index, ensuring it's an integer value and not a callable/method.
+        # Some upstream data structures might have an attribute named 'index'
+        # that is a method (like list.index). Guard against callables and coerce safely.
+        raw_idx = o.get("index", p.get("index", i + 1))
+        if callable(raw_idx):
+            # Fall back to positional index if 'index' field is a method/callable
+            safe_idx = i + 1
+        else:
+            try:
+                safe_idx = int(raw_idx)
+            except Exception:
+                safe_idx = i + 1
+        idx = safe_idx
 
         # Baseline values from original
         o_start = _sec(o.get("start"))
@@ -433,8 +444,17 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
     if len(orig_list) > n:
         for j in range(n, len(orig_list)):
             o = _norm_item(orig_list[j])
+            # Ensure safe integer index for orphan original items as well
+            o_idx_raw = o.get("index", j + 1)
+            if callable(o_idx_raw):
+                o_idx = j + 1
+            else:
+                try:
+                    o_idx = int(o_idx_raw)
+                except Exception:
+                    o_idx = j + 1
             merged.append({
-                "index": int(o.get("index", j + 1)),
+                "index": o_idx,
                 "start": float(_sec(o.get("start"))),
                 "end": float(_sec(o.get("end"), _sec(o.get("start")) + 0.01)),
                 "text": _normalize_space(o.get("text", "")),
@@ -445,8 +465,17 @@ def align_subtitles(original_subs: List[Dict], proposed_subs: List[Dict]) -> Lis
     if len(prop_list) > n:
         for j in range(n, len(prop_list)):
             p = _norm_item(prop_list[j])
+            # Ensure safe integer index for orphan proposed items as well
+            p_idx_raw = p.get("index", j + 1)
+            if callable(p_idx_raw):
+                p_idx = j + 1
+            else:
+                try:
+                    p_idx = int(p_idx_raw)
+                except Exception:
+                    p_idx = j + 1
             merged.append({
-                "index": int(p.get("index", j + 1)),
+                "index": p_idx,
                 "start": float(_sec(p.get("start"))),
                 "end": float(_sec(p.get("end"), _sec(p.get("start")) + 0.01)),
                 "text": _normalize_space(p.get("text", "")),
