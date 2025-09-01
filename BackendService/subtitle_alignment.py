@@ -105,7 +105,7 @@ def _to_seg_dict(seg: Any) -> Dict[str, Any]:
     return {"start": start, "end": end, "text": text}
 
 
-def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02, min_duration: float = 0.3) -> None:
+def _ensure_monotonic(subs: List[Dict], min_gap: float = 0.02, min_duration: float = 0.8) -> None:
     """
     Ensure start/end times are monotonic and non-overlapping in-place.
     - Enforces start_i >= prev_end + min_gap
@@ -165,6 +165,10 @@ def align_subtitles(
 
     Returns:
         List[dict]: Aligned subtitles with fields index, start, end, text, format.
+
+    Notes on timing policy:
+    - Final output ensures cues are monotonic and enforce a readable minimum duration (>= 1.0s).
+    - A small gap (~0.05s) is introduced to avoid cues ending/starting at the exact same instant.
     """
     # Helper: safely coerce to float seconds.
     def _sec(val, default=0.0) -> float:
@@ -350,7 +354,10 @@ def align_subtitles(
     for k, s in enumerate(merged, start=1):
         s["index"] = k
 
-    _ensure_monotonic(merged, min_gap=0.0, min_duration=0.01)
+    # Final pass: enforce readable on-screen durations
+    # - min_gap: small separation to avoid cues ending and starting at the same instant
+    # - min_duration: enforce at least 1.0s so subtitles are visible/readable
+    _ensure_monotonic(merged, min_gap=0.05, min_duration=1.0)
     return merged
 
 
