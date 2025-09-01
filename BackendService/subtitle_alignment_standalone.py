@@ -1,39 +1,100 @@
 """
-Standalone alignment and correction entry point (no FastAPI dependency).
+Standalone alignment and correction module.
+
+This file is self-contained and does not import any project-local modules.
+It provides a public interface for transcript-based subtitle alignment and
+light text correction suitable for OTT-style constraints.
+
+Dependencies (optional but supported):
+- rapidfuzz (for robust fuzzy text similarity)
+- sentence-transformers (for semantic similarity, optional)
+- language-tool-python (for grammar correction, optional)
+- python-srt (for composing/parsing SRT when needed, optional)
+
+If optional dependencies are unavailable at runtime, the module falls back to
+simpler heuristics to maintain deterministic behavior.
 
 PUBLIC_INTERFACE:
 - write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> List[Dict]
-
-Inputs:
-- transcript: Whisper-like transcript either as:
-    * dict with "segments": [{"text","start","end"}, ...]
-    * list of {"text","start","end"} dicts (strings will be coerced)
-- subtitles: list of dicts, each with keys:
-    { index, start, end, text, format }
-    Missing values are tolerated and fixed; format is carried through if available.
-
-Behavior:
-- Aligns subtitles to transcript using subtitle_alignment_simple.align_subtitles_to_transcript
-- Applies light text correction for OTT compliance using subtitle_correction.correct_subtitle_text
-- Returns corrected subtitles as a list of dicts matching input format
-- Does not write to a file; callers can write if needed using the returned list and _compose_srt.
-
-This is intentionally decoupled from FastAPI, providing a pure-Python callable.
+  Create corrected, aligned subtitles and return as list of dicts (no file I/O)
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Callable, Union
+import re
+import logging
+from math import isfinite
 
-from .subtitle_alignment_simple import align_subtitles_to_transcript
-from .subtitle_correction import correct_subtitle_text
 
-try:
-    # Optional config; fallback to defaults if unavailable
-    from .config import get_settings  # type: ignore
-except Exception:  # pragma: no cover
-    get_settings = None  # type: ignore
+# ---------------------------
+# Basic text utilities
+# ---------------------------
+_PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_text(s: str) -> str:
+    """Lowercase, strip punctuation (keep apostrophes), squeeze whitespace."""
+    s = s.lower().strip()
+    s = _PUNCT_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s).strip()
+    return s
+
+
+def _tokens(s: str) -> List[str]:
+    return [t for t in _normalize_text(s).split(" ") if t]
+
+
+def _jaccard(a_tokens: List[str], b_tokens: List[str]) -> float:
+    if not a_tokens and not b_tokens:
+        return 1.0
+    if not a_tokens or not b_tokens:
+        return 0.0
+    a, b = set(a_tokens), set(b_tokens)
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _safe_float(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _sort_by_start(items: List[Dict]) -> List[Dict]:
+    # Be defensive: if items may include non-dicts (e.g., strings), coerce to dicts with text only
+    normed: List[Dict] = []
+    for it in items:
+        if isinstance(it, dict):
+            normed.append(it)
+        else:
+            normed.append({"text": str(it) if it is not None else "", "start": 0.0, "end": 0.0})
+    return sorted(normed, key=lambda x: _safe_float(x.get("start", 0.0)))
+
+
+def _merge_texts(items: List[Dict]) -> str:
+    texts: List[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            t = str(it.get("text", "")).strip()
+        else:
+            t = str(it).strip()
+        if t:
+            texts.append(t)
+    return " ".join(texts)
+
+
+def _span_time(items: List[Dict]) -> Tuple[float, float]:
+    if not items:
+        return (0.0, 0.0)
+    return (_safe_float(items[0].get("start", 0.0)), _safe_float(items[-1].get("end", 0.0)))
+
+
+def _clip(val: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, val))
 
 
 def _format_seconds_to_srt(seconds: float) -> str:
@@ -45,6 +106,645 @@ def _format_seconds_to_srt(seconds: float) -> str:
     s = ms // 1000
     ms %= 1000
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _rf_scores(a: str, b: str) -> Tuple[float, float]:
+    """Compute RapidFuzz partial_ratio and token_set_ratio in [0,1], fallback to Jaccard."""
+    try:
+        from rapidfuzz import fuzz  # type: ignore
+        pr = float(fuzz.partial_ratio(a, b)) / 100.0
+        tr = float(fuzz.token_set_ratio(a, b)) / 100.0
+        return pr, tr
+    except Exception:
+        at, bt = _tokens(a), _tokens(b)
+        j = _jaccard(at, bt)
+        return j, j
+
+
+def _lazy_st_model_loader(model_name: str) -> Callable[[], Any]:
+    """Return a zero-arg closure that loads the sentence-transformers model once (cached)."""
+    model_ref: Dict[str, Any] = {"model": None, "name": model_name}
+
+    def _load():
+        if model_ref["model"] is None:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+
+            model_ref["model"] = SentenceTransformer(model_ref["name"])
+        return model_ref["model"]
+
+    return _load
+
+
+def _embedding_cosine(a: str, b: str, model_loader: Optional[Callable[[], Any]]) -> float:
+    """Compute cosine similarity using sentence-transformers if available and enabled."""
+    if model_loader is None:
+        return 0.0
+    try:
+        model = model_loader()
+        from numpy import dot  # type: ignore
+        from numpy.linalg import norm  # type: ignore
+        va, vb = model.encode([a, b], convert_to_numpy=True)
+        denom = float(norm(va) * norm(vb))
+        if denom <= 0.0 or not isfinite(denom):
+            return 0.0
+        return float(dot(va, vb) / denom)
+    except Exception:
+        return 0.0
+
+
+def _hybrid_score(
+    sub_text: str,
+    span_text: str,
+    weights: Dict[str, float],
+    model_loader: Optional[Callable[[], Any]],
+) -> float:
+    """Weighted combination of RapidFuzz metrics and embedding cosine."""
+    pr, tr = _rf_scores(sub_text, span_text)
+    emb = _embedding_cosine(sub_text, span_text, model_loader)
+    return (
+        weights.get("rapidfuzz_partial", 0.4) * pr
+        + weights.get("rapidfuzz_token", 0.4) * tr
+        + weights.get("embedding", 0.2) * emb
+    )
+
+
+def _best_transcript_span_for_sub(
+    sub_tokens: List[str],
+    transcript: List[Dict],
+    start_idx: int,
+    max_span: int = 5,
+    min_sim: float = 0.2,
+    *,
+    hybrid: bool = False,
+    weights: Optional[Dict[str, float]] = None,
+    model_loader: Optional[Callable[[], Any]] = None,
+    raw_sub_text: Optional[str] = None,
+) -> Tuple[int, int, float]:
+    """
+    Find the best contiguous span [i, j] of transcript segments starting from start_idx within max_span
+    that maximizes similarity to the subtitle.
+    - If hybrid=False: use Jaccard over tokens.
+    - If hybrid=True: use weighted RapidFuzz + Embedding cosine.
+    Returns (i, j_inclusive, score). If no span exceeds min_sim, returns (start_idx, start_idx, 0.0).
+    """
+    best_i, best_j, best_score = start_idx, start_idx, 0.0
+    for i in range(start_idx, min(len(transcript), start_idx + max_span)):
+        span_text = ""
+        for j in range(i, min(len(transcript), i + max_span)):
+            span_text = (span_text + " " + str(transcript[j].get("text", ""))).strip() if span_text else str(
+                transcript[j].get("text", "")
+            )
+            if not hybrid:
+                span_tokens = _tokens(span_text)
+                score = _jaccard(sub_tokens, span_tokens)
+            else:
+                score = _hybrid_score(raw_sub_text or " ".join(sub_tokens), span_text, weights or {}, model_loader)
+            if score > best_score:
+                best_i, best_j, best_score = i, j, score
+    if best_score < min_sim:
+        return (start_idx, start_idx, 0.0)
+    return (best_i, best_j, best_score)
+
+
+def _calc_reading_duration(text: str, chars_per_sec: float, min_duration: float, max_duration: float) -> float:
+    """Estimate duration from text length with clamps."""
+    sec = max(min_duration, len(_normalize_text(text)) / max(1e-6, chars_per_sec))
+    return min(sec, max_duration)
+
+
+def _distribute_time_within_span_with_delayed_fix(
+    sub_text: str,
+    span_text: str,
+    span_start: float,
+    span_end: float,
+    *,
+    last_end: float,
+    min_gap: float,
+    min_duration: float,
+    max_duration: float,
+    chars_per_sec: float,
+    delay_threshold: float,
+) -> Tuple[float, float]:
+    """
+    Improved timing calculation:
+    - Start at max(span_start, last_end + min_gap), unless the original offset is far after span_start
+      (delayed start), then snap closer to span_start + small pad.
+    - End based on reading speed, clamped within [start, span_end] and [min_duration, max_duration].
+    """
+    span_start = float(span_start)
+    span_end = float(span_end)
+    base_start = max(span_start, last_end + min_gap)
+
+    # Detect delayed start: if base_start is significantly after span_start, snap earlier
+    if base_start - span_start > delay_threshold:
+        # pull start towards span_start but keep minimal gap after last_end
+        base_start = max(span_start + min_gap, last_end + min_gap)
+
+    # Compute duration from text
+    est_dur = _calc_reading_duration(sub_text, chars_per_sec, min_duration, max_duration)
+    est_end = min(base_start + est_dur, span_end)
+
+    # Ensure at least min_duration; if cannot extend, shift earlier within span
+    if est_end - base_start < min_duration:
+        est_end = min(span_end, base_start + min_duration)
+        if est_end - base_start < min_duration and span_end - span_start >= min_duration:
+            # try shifting start back if possible (bounded by span_start)
+            base_start = max(span_start, est_end - min_duration)
+
+    return (float(base_start), float(max(base_start + min_duration, est_end)))
+
+
+def _enforce_monotonic_nonoverlap(
+    subs: List[Dict],
+    min_gap: float = 0.02,
+    min_dur: float = 0.2,
+) -> List[Dict]:
+    """
+    Make sure subtitle timings are monotonic and non-overlapping.
+    - Ensures start[i] >= end[i-1] + min_gap
+    - Ensures duration >= min_dur (expanding end if necessary)
+    """
+    result = _sort_by_start(subs)
+    # First pass: enforce monotonic starts and min duration
+    for i, s in enumerate(result):
+        old_start = _safe_float(s.get("start", 0.0))
+        old_end = _safe_float(s.get("end", 0.0))
+        start = old_start
+        end = old_end
+        if i > 0:
+            prev_end = _safe_float(result[i - 1].get("end", 0.0))
+            start = max(start, prev_end + min_gap)
+        if end <= start + min_dur:
+            end = start + min_dur
+        s["start"], s["end"] = start, max(end, start)
+    # Second pass: ensure next starts after current with min gap; if needed, extend next
+    for i in range(len(result) - 1):
+        cur = result[i]
+        nxt = result[i + 1]
+        if _safe_float(nxt["start"]) < _safe_float(cur["end"]) + min_gap:
+            nxt["start"] = _safe_float(cur["end"]) + min_gap
+            if _safe_float(nxt["end"]) < _safe_float(nxt["start"]) + min_dur:
+                nxt["end"] = _safe_float(nxt["start"]) + min_dur
+    return result
+
+
+# ---------------------------
+# Light text correction
+# ---------------------------
+_PUNCT_SPACE_RE = re.compile(r"\s+")
+_TRAILING_SPACES_RE = re.compile(r"[ \t]+$", re.MULTILINE)
+
+
+def _nfkc_normalize(text: str) -> str:
+    try:
+        import unicodedata
+        return unicodedata.normalize("NFKC", text)
+    except Exception:
+        return text
+
+
+def _normalize_spaces(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _TRAILING_SPACES_RE.sub("", text)
+    # Collapse multiple spaces but preserve newlines
+    return "\n".join(_PUNCT_SPACE_RE.sub(" ", ln).strip() for ln in text.splitlines())
+
+
+def _sentence_case(s: str) -> str:
+    if not s:
+        return s
+    first_alpha = next((i for i, ch in enumerate(s) if ch.isalpha()), None)
+    if first_alpha is None:
+        return s
+    return s[:first_alpha] + s[first_alpha:first_alpha + 1].upper() + s[first_alpha + 1:]
+
+
+def _load_spacy_model(lang: str) -> Optional[Callable[[], any]]:
+    """
+    Return a lazy loader for spaCy model based on ISO-639-1 code.
+    Fallback gracefully if not installed.
+    """
+    lang = (lang or "en").lower()
+    lang_to_model = {
+        "en": "en_core_web_sm",
+        "es": "es_core_news_sm",
+        "fr": "fr_core_news_sm",
+        "de": "de_core_news_sm",
+        "it": "it_core_news_sm",
+        "pt": "pt_core_news_sm",
+        "nl": "nl_core_news_sm",
+        "xx": "xx_sent_ud_sm",
+    }
+    model_name = lang_to_model.get(lang, "xx_sent_ud_sm")
+    state: Dict[str, any] = {"nlp": None}
+
+    def _loader():
+        if state["nlp"] is not None:
+            return state["nlp"]
+        try:
+            import spacy  # type: ignore
+            state["nlp"] = spacy.load(model_name)
+            return state["nlp"]
+        except Exception:
+            try:
+                import spacy  # type: ignore
+                state["nlp"] = spacy.blank(lang if hasattr(spacy.util, "get_lang_class") else "xx")  # type: ignore
+                return state["nlp"]
+            except Exception:
+                return None
+
+    return _loader
+
+
+def _spacy_protect_entities(text: str, nlp_loader: Optional[Callable[[], any]]) -> List[Tuple[str, bool]]:
+    """
+    Split text into tokens and mark protected spans (e.g., named entities).
+    Returns list of (token_text, protected). Falls back to unprotected span if unavailable.
+    """
+    if nlp_loader is None:
+        return [(text, False)]
+    try:
+        nlp = nlp_loader()
+        if nlp is None:
+            return [(text, False)]
+        doc = nlp(text)
+        protected_ranges = []
+        if hasattr(doc, "ents"):
+            for ent in doc.ents:
+                protected_ranges.append((ent.start_char, ent.end_char))
+        tokens: List[Tuple[str, bool]] = []
+        i = 0
+        for start, end in protected_ranges:
+            if i < start:
+                tokens.append((text[i:start], False))
+            tokens.append((text[start:end], True))
+            i = end
+        if i < len(text):
+            tokens.append((text[i:], False))
+        if not protected_ranges:
+            return [(text, False)]
+        return tokens
+    except Exception:
+        return [(text, False)]
+
+
+def _apply_language_tool(text: str, lang: str) -> str:
+    """
+    Run language-tool-python corrections. If unavailable, return original text.
+    """
+    try:
+        import language_tool_python  # type: ignore
+        # Try Public API first
+        try:
+            tool = language_tool_python.LanguageToolPublicAPI(lang.lower() or "en")
+            matches = tool.check(text)
+            return language_tool_python.utils.correct(text, matches)
+        except Exception:
+            tool = language_tool_python.LanguageTool(lang.lower() or "en")
+            matches = tool.check(text)
+            return language_tool_python.utils.correct(text, matches)
+    except Exception:
+        return text
+
+
+def _normalize_punctuation(text: str) -> str:
+    text = text.replace(" ,", ",").replace(" .", ".").replace(" !", "!").replace(" ?", "?")
+    text = re.sub(r"\s+([,\.!?;:])", r"\1", text)
+    text = re.sub(r"([\(\[])\s+", r"\1", text)
+    text = re.sub(r"\s+([\)\]])", r"\1", text)
+    return text
+
+
+def _wrap_text(text: str, max_chars_per_line: int, max_lines: int) -> List[str]:
+    """
+    Greedy word-wrapping for subtitle cues:
+    - Do not exceed max_chars_per_line
+    - Try to balance two lines by length if max_lines == 2
+    - If single word exceeds max, hard-break
+    """
+    words = text.split()
+    if not words:
+        return [""]
+    lines: List[str] = []
+    cur = ""
+    for w in words:
+        if not cur:
+            cur = w
+            continue
+        if len(cur) + 1 + len(w) <= max_chars_per_line:
+            cur = f"{cur} {w}"
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+
+    if len(lines) > max_lines:
+        joined = " ".join(words)
+        if max_lines == 1:
+            if len(joined) <= max_chars_per_line:
+                return [joined]
+            return [joined[:max_chars_per_line]]
+        else:
+            half = max(1, min(len(joined) // 2, len(joined) - 1))
+            left = joined.rfind(" ", 0, half)
+            right = joined.find(" ", half)
+            split_at = left if left != -1 else right
+            if split_at == -1:
+                split_at = half
+            l1 = joined[:split_at].strip()
+            l2 = joined[split_at:].strip()
+            if len(l1) > max_chars_per_line:
+                l1 = l1[:max_chars_per_line]
+            if len(l2) > max_chars_per_line:
+                l2 = l2[:max_chars_per_line]
+            return [l1, l2]
+
+    fixed: List[str] = []
+    for ln in lines:
+        if len(ln) <= max_chars_per_line:
+            fixed.append(ln)
+        else:
+            fixed.append(ln[:max_chars_per_line])
+    return fixed[:max_lines]
+
+
+# PUBLIC_INTERFACE
+def correct_subtitle_text(
+    text: str,
+    lang: Optional[str] = None,
+    *,
+    protect_entities: bool = True,
+    sentence_case: bool = True,
+    use_language_tool: bool = True,
+    max_chars_per_line: int = 42,
+    max_lines: int = 2,
+) -> str:
+    """Correct grammar/spelling and format a subtitle cue text."""
+    lang = (lang or "en").lower()
+    original = text or ""
+
+    normalized = _normalize_spaces(_nfkc_normalize(original))
+    nlp_loader = _load_spacy_model(lang) if protect_entities else None
+    spans = _spacy_protect_entities(normalized, nlp_loader) if protect_entities else [(normalized, False)]
+
+    corrected_parts: List[str] = []
+    for span_text, is_protected in spans:
+        part = span_text
+        if not is_protected:
+            if sentence_case:
+                part = _sentence_case(part)
+            if use_language_tool:
+                part = _apply_language_tool(part, lang)
+            part = _normalize_punctuation(part)
+        corrected_parts.append(part)
+
+    corrected = "".join(corrected_parts)
+    corrected = _normalize_spaces(corrected)
+    wrapped = "\n".join(_wrap_text(corrected, int(max_chars_per_line or 42), int(max_lines or 2)))
+    return wrapped
+
+
+# ---------------------------
+# Core alignment
+# ---------------------------
+
+def _get_logger(verbose: bool, logger: Optional[logging.Logger]) -> Optional[logging.Logger]:
+    """Return logger instance according to verbose and provided logger."""
+    if logger is not None:
+        return logger
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+        return logging.getLogger(__name__)
+    return None
+
+
+# PUBLIC_INTERFACE
+def align_subtitles_to_transcript(
+    transcript: Union[List[Dict], Dict[str, Any]],
+    subtitles: List[Dict],
+    *,
+    max_span: int = 5,
+    min_similarity: float = 0.2,
+    min_duration: float = 0.4,
+    min_gap: float = 0.02,
+    verbose: bool = False,
+    logger: Optional[logging.Logger] = None,
+    # Advanced toggles (no project config dependency; use provided or defaults)
+    enable_hybrid: Optional[bool] = False,
+    embedding_model_name: Optional[str] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    fuzzy_weights: Optional[Dict[str, float]] = None,
+    default_chars_per_sec: Optional[float] = 15.0,
+    max_cue_duration: Optional[float] = 6.0,
+    delayed_start_threshold: Optional[float] = 0.5,
+) -> List[Dict]:
+    """
+    Align subtitles' start/end timings to a reference transcript as much as possible.
+    See module docstring for data contracts.
+    """
+    # ---- Normalize transcript ----
+    if isinstance(transcript, dict):
+        segments_raw = transcript.get("segments") or []
+        if not isinstance(segments_raw, list):
+            segments_raw = []
+        transcript_list = segments_raw
+    elif isinstance(transcript, list):
+        transcript_list = transcript
+    else:
+        raise TypeError("transcript must be a Whisper-like dict with 'segments' or a list of segments")
+
+    def _maybe_timecode_to_seconds(v: Any) -> float:
+        if isinstance(v, (int, float)):
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        if isinstance(v, str):
+            m = re.match(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})", v.strip())
+            if m:
+                h, mi, s, ms = m.groups()
+                return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        try:
+            return float(v)
+        except Exception:
+            return 0.0
+
+    t_coerced: List[Dict[str, Any]] = []
+    for seg in transcript_list:
+        if seg is None:
+            continue
+        if isinstance(seg, dict):
+            text = str(seg.get("text", "")) if seg.get("text") is not None else ""
+            start = _maybe_timecode_to_seconds(seg.get("start", 0.0))
+            end = _maybe_timecode_to_seconds(seg.get("end", 0.0))
+        else:
+            text = str(seg)
+            start = 0.0
+            end = 0.0
+        t_coerced.append({"text": text, "start": float(start), "end": float(end if end >= start else start)})
+    t_segments = _sort_by_start(t_coerced)
+
+    # ---- Normalize subtitles ----
+    if not isinstance(subtitles, list):
+        raise TypeError("subtitles must be a list of dicts")
+
+    s_raw: List[Dict[str, Any]] = []
+    for idx, c in enumerate(subtitles, start=1):
+        if c is None:
+            c = {}
+        if not isinstance(c, dict):
+            c = {"text": str(c)}
+        text = str(c.get("text", "")) if c.get("text") is not None else ""
+        start = _maybe_timecode_to_seconds(c.get("start", 0.0))
+        end = _maybe_timecode_to_seconds(c.get("end", 0.0))
+        index_val = c.get("index")
+        try:
+            index = int(index_val) if index_val is not None else idx
+        except Exception:
+            index = idx
+        fmt = c.get("format")
+        fmt = str(fmt).strip() if isinstance(fmt, str) else ""
+        if end < start:
+            end = start
+        s_raw.append(
+            {
+                "index": index,
+                "start": float(start),
+                "end": float(end),
+                "text": text,
+                "format": fmt,
+            }
+        )
+
+    # Determine common format: first non-empty wins
+    common_format = ""
+    for c in s_raw:
+        if c["format"]:
+            common_format = c["format"]
+            break
+
+    s_cues = sorted(s_raw, key=lambda x: _safe_float(x.get("start", 0.0)))
+
+    if not t_segments or not s_cues:
+        normalized: List[Dict] = []
+        for idx, item in enumerate(s_cues, start=1):
+            start_v = _safe_float(item.get("start", 0.0))
+            end_v = _safe_float(item.get("end", 0.0))
+            text_v = str(item.get("text", ""))
+            normalized.append(
+                {
+                    "index": int(idx),
+                    "start": float(start_v),
+                    "end": float(end_v if end_v >= start_v else start_v),
+                    "text": text_v,
+                    "format": common_format,
+                }
+            )
+        return normalized
+
+    _logger = _get_logger(verbose, logger)
+
+    enable_hybrid = bool(enable_hybrid)
+    embedding_model_name = embedding_model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    fuzzy_weights = fuzzy_weights or {"rapidfuzz_partial": 0.4, "rapidfuzz_token": 0.4, "embedding": 0.2}
+    default_chars_per_sec = float(default_chars_per_sec or 15.0)
+    max_cue_duration = float(max_cue_duration or 6.0)
+    delayed_start_threshold = float(delayed_start_threshold or 0.5)
+
+    model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
+
+    aligned: List[Dict] = []
+    t_idx = 0
+
+    for cue_idx, cue in enumerate(s_cues):
+        sub_text = str(cue.get("text", ""))
+        sub_tokens = _tokens(sub_text)
+        orig_start = _safe_float(cue.get("start", 0.0))
+        orig_end = _safe_float(cue.get("end", 0.0))
+
+        i, j, score = _best_transcript_span_for_sub(
+            sub_tokens=sub_tokens,
+            transcript=t_segments,
+            start_idx=t_idx,
+            max_span=max_span,
+            min_sim=min_similarity,
+            hybrid=bool(enable_hybrid),
+            weights=fuzzy_weights,
+            model_loader=model_loader,
+            raw_sub_text=sub_text,
+        )
+
+        new_cue = dict(cue)
+        if score >= min_similarity:
+            span = t_segments[i : j + 1]
+            span_text = _merge_texts(span)
+            span_start, span_end = _span_time(span)
+
+            last_end = aligned[-1]["end"] if aligned else 0.0
+            est_start, est_end = _distribute_time_within_span_with_delayed_fix(
+                sub_text=sub_text,
+                span_text=span_text,
+                span_start=span_start,
+                span_end=span_end,
+                last_end=float(last_end),
+                min_gap=float(min_gap),
+                min_duration=float(min_duration),
+                max_duration=float(max_cue_duration),
+                chars_per_sec=float(default_chars_per_sec),
+                delay_threshold=float(delayed_start_threshold),
+            )
+            if est_end - est_start < min_duration:
+                est_end = est_start + min_duration
+                if est_end > span_end:
+                    shift = est_end - span_end
+                    est_end = span_end
+                    est_start = max(span_start, est_start - shift)
+
+            new_cue["start"] = float(est_start)
+            new_cue["end"] = float(est_end)
+            t_idx = max(t_idx, j)
+        else:
+            start_o = _safe_float(cue.get("start", 0.0))
+            end_o = _safe_float(cue.get("end", start_o + min_duration))
+            if end_o - start_o < min_duration:
+                end_o = start_o + min_duration
+            new_cue["start"] = float(start_o)
+            new_cue["end"] = float(end_o)
+
+        if _logger is not None and (new_cue["start"] != orig_start or new_cue["end"] != orig_end):
+            _logger.info(
+                "Alignment change | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f | sim=%0.3f",
+                cue_idx,
+                orig_start,
+                orig_end,
+                new_cue["start"],
+                new_cue["end"],
+                float(score),
+            )
+
+        aligned.append(new_cue)
+
+    aligned = _enforce_monotonic_nonoverlap(aligned, min_gap=min_gap, min_dur=min_duration)
+
+    normalized: List[Dict] = []
+    for idx, item in enumerate(aligned, start=1):
+        start_v = _safe_float(item.get("start", 0.0))
+        end_v = _safe_float(item.get("end", 0.0))
+        text_v = str(item.get("text", ""))
+        normalized.append(
+            {
+                "index": int(idx),
+                "start": float(start_v),
+                "end": float(end_v),
+                "text": text_v,
+                "format": common_format,
+            }
+        )
+    return normalized
 
 
 def _compose_srt(cues: List[Dict]) -> str:
@@ -65,30 +765,12 @@ def _compose_srt(cues: List[Dict]) -> str:
     return "\n".join(out_lines).strip() + "\n"
 
 
-def _ensure_processed_dir(processed_dir: Optional[str]) -> Path:
-    """
-    Retained for compatibility; not used by default since this module no longer writes files.
-    """
-    if processed_dir:
-        p = Path(processed_dir)
-    else:
-        if get_settings is not None:
-            try:
-                p = Path(get_settings().PROCESSED_DIR)
-            except Exception:
-                p = Path("./processed")
-        else:
-            p = Path("./processed")
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 # PUBLIC_INTERFACE
 def write_corrected_alignment(
     transcript: Any,
     subtitles: List[Dict],
     *,
-    processed_dir: Optional[str] = None,
+    processed_dir: Optional[str] = None,  # retained for signature compatibility; not used
     language: Optional[str] = None,
 ) -> List[Dict]:
     """Create corrected, aligned subtitles and return them as a list of dicts.
@@ -105,30 +787,17 @@ def write_corrected_alignment(
             - end: float or timecode string
             - text: str
             - format: str (propagated to output if provided)
-        processed_dir: Deprecated here; retained for signature compatibility (no write happens).
+        processed_dir: Deprecated here; retained for compatibility (no write happens).
         language: Optional language code guiding light text correction.
 
     Returns:
         List[Dict]: Corrected subtitles in the same structure as input:
             [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
     """
-    # Align using the robust aligner
-    settings = None
-    if get_settings is not None:
-        try:
-            settings = get_settings()
-        except Exception:
-            settings = None
-
     aligned_cues = align_subtitles_to_transcript(
         transcript=transcript,
         subtitles=subtitles,
-        enable_hybrid=(bool(getattr(settings, "ALIGNMENT_EMBEDDINGS_ENABLED", False)) if settings else False),
-        embedding_model_name=(getattr(settings, "ALIGNMENT_MODEL_NAME", None) if settings else None),
-        fuzzy_weights=(getattr(settings, "FUZZY_WEIGHTS", None) if settings else None),
-        default_chars_per_sec=(getattr(settings, "DEFAULT_CHARS_PER_SEC", None) if settings else None),
-        max_cue_duration=(float(getattr(settings, "MAX_CUE_DURATION_MS", 6000)) / 1000.0 if settings else None),
-        delayed_start_threshold=(float(getattr(settings, "DELAY_THRESHOLD_MS", 500)) / 1000.0 if settings else None),
+        enable_hybrid=False,  # pure fuzzy by default to avoid heavy model load unless caller opts in
     )
 
     # Light correction on text
@@ -148,5 +817,19 @@ def write_corrected_alignment(
         new_cue["text"] = fixed_text
         final_cues.append(new_cue)
 
-    # Return corrected cues; no file writes here.
     return final_cues
+
+
+if __name__ == "__main__":
+    # Simple manual demo for quick testing when running this file directly.
+    demo_transcript = [
+        {"text": "Hello world", "start": 0.0, "end": 1.0},
+        {"text": "This is a demo", "start": 1.05, "end": 2.5},
+        {"text": "Enjoy!", "start": 2.6, "end": 3.2},
+    ]
+    demo_subs = [
+        {"text": "hello world", "start": 0.4, "end": 1.6},
+        {"text": "this is demo", "start": 2.1, "end": 3.5},
+    ]
+    out = write_corrected_alignment(demo_transcript, demo_subs, language="en")
+    print(_compose_srt(out))
