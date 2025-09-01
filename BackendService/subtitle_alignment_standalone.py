@@ -5,6 +5,11 @@ This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
 
+Time normalization contract:
+- All time values for 'start' and 'end' are normalized to float seconds internally and in outputs.
+- If inputs contain SRT-like timecodes or strings, they are converted to float seconds at ingestion.
+- No string timecodes are returned; callers can format times to SRT if needed using helper functions in this module.
+
 Dependencies (optional but supported):
 - google-generativeai (official Gemini SDK) — optional; used if available and enabled via env
 - rapidfuzz (for robust fuzzy text similarity)
@@ -732,7 +737,11 @@ def align_subtitles_to_transcript(
 ) -> List[Dict]:
     """
     Align subtitles' start/end timings to a reference transcript as much as possible.
-    See module docstring for data contracts.
+
+    Contract:
+    - Inputs may contain numeric seconds, strings, or SRT-like timecodes for 'start'/'end'.
+    - All inputs are normalized to float seconds internally.
+    - The returned list always uses float seconds for 'start' and 'end' (no strings/timecodes).
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -931,15 +940,17 @@ def align_subtitles_to_transcript(
         start_v = _safe_float(item.get("start", 0.0))
         end_v = _safe_float(item.get("end", 0.0))
         text_v = str(item.get("text", ""))
-        normalized.append(
-            {
-                "index": int(idx),
-                "start": float(start_v),
-                "end": float(end_v),
-                "text": text_v,
-                "format": common_format,
-            }
-        )
+        out_item = {
+            "index": int(idx),
+            "start": float(start_v),
+            "end": float(end_v if end_v >= start_v else start_v),
+            "text": text_v,
+            "format": common_format,
+        }
+        # Enforce float seconds contract
+        assert isinstance(out_item["start"], float), "start must be float seconds"
+        assert isinstance(out_item["end"], float), "end must be float seconds"
+        normalized.append(out_item)
     return normalized
 
 
@@ -947,6 +958,7 @@ def _compose_srt(cues: List[Dict]) -> str:
     """
     Compose an SRT text from a list of cues.
     Note: This helper is intentionally kept for callers who want to write output themselves.
+    Expects 'start' and 'end' to be float seconds and performs SRT formatting.
     """
     out_lines: List[str] = []
     for i, cue in enumerate(cues, start=1):
@@ -979,15 +991,15 @@ def write_corrected_alignment(
             Non-dict items will be coerced to text with zeroed times.
         subtitles: List of subtitle dicts with keys:
             - index: int (optional; will be resequenced)
-            - start: float or timecode string
-            - end: float or timecode string
+            - start: seconds (float) or timecode string, will be normalized to float seconds
+            - end: seconds (float) or timecode string, will be normalized to float seconds
             - text: str
             - format: str (propagated to output if provided)
         processed_dir: Deprecated here; retained for compatibility (no write happens).
         language: Optional language code guiding light text correction.
 
     Returns:
-        List[Dict]: Corrected subtitles in the same structure as input:
+        List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds:
             [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
     """
     aligned_cues = align_subtitles_to_transcript(
@@ -1015,6 +1027,14 @@ def write_corrected_alignment(
         )
         new_cue = dict(cue)
         new_cue["text"] = fixed_text
+        # Explicitly normalize to float seconds for contract enforcement
+        new_cue["start"] = float(_safe_float(new_cue.get("start", 0.0)))
+        new_cue["end"] = float(_safe_float(new_cue.get("end", new_cue["start"])))
+        if new_cue["end"] < new_cue["start"]:
+            new_cue["end"] = new_cue["start"]
+        # Sanity asserts for public contract
+        assert isinstance(new_cue["start"], float), "start must be float seconds"
+        assert isinstance(new_cue["end"], float), "end must be float seconds"
         final_cues.append(new_cue)
 
     return final_cues
