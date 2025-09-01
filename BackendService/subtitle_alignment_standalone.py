@@ -1,11 +1,12 @@
 """
-Standalone alignment and correction module (pure local/no external APIs).
+Standalone alignment and correction module with optional Gemini LLM integration.
 
 This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
 
 Dependencies (optional but supported):
+- google-generativeai (official Gemini SDK) — optional; used if available and enabled via env
 - rapidfuzz (for robust fuzzy text similarity)
 - sentence-transformers (for semantic similarity, optional; local model load only)
 - language-tool-python (for grammar correction, optional; local or public API if available)
@@ -15,11 +16,18 @@ If optional dependencies are unavailable at runtime, the module falls back to
 simpler heuristics to maintain deterministic behavior.
 
 Important note on language support:
-- All corrections here are heuristic/rule-based. They generally work best for languages using whitespace-delimited
-  tokens and Latin scripts (e.g., en, es, fr, de, it, pt, nl).
+- All corrections here are heuristic/rule-based, with optional LLM rewriting if Gemini is available and enabled.
 - For languages with complex tokenization or script (e.g., CJK, Thai, Arabic), results depend on spaCy/language-tool
   availability and the correctness of tokenization models. Without them, fallback heuristics apply and quality may be limited.
-- No external LLMs or API keys are required or used in this module.
+
+Gemini integration:
+- This module supports the official Gemini Python SDK (google-generativeai) without using raw HTTP requests.
+- To enable, set environment variables (recommended to be provided via the orchestrator into .env):
+    GEMINI_API_KEY           # Your Google API key
+    GEMINI_MODEL_NAME        # e.g., "gemini-1.5-pro" or "gemini-1.5-flash" (optional, defaults inside code)
+    GEMINI_ENABLED           # "1" or "true" (case-insensitive) to enable usage in this module
+- The code attempts to import google.generativeai; if missing, it will gracefully skip LLM calls.
+- All Gemini usage is optional and guarded; local heuristics remain the default behavior.
 
 PUBLIC_INTERFACE:
 - write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> List[Dict]
@@ -33,6 +41,7 @@ import re
 import logging
 from math import isfinite
 import json
+import os
 
 
 # ---------------------------
@@ -40,6 +49,125 @@ import json
 # ---------------------------
 _PUNCT_RE = re.compile(r"[^\w\s']", flags=re.UNICODE)
 _WS_RE = re.compile(r"\s+")
+
+
+def _try_import_gemini_sdk():
+    """
+    Attempt to import the official Gemini SDK.
+
+    Returns:
+        module or None: google.generativeai if import succeeded, else None.
+    """
+    try:
+        import google.generativeai as genai  # type: ignore
+        return genai
+    except Exception:
+        return None
+
+
+def _is_truthy_env(val: Optional[str]) -> bool:
+    return str(val or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _init_gemini_client() -> Optional[Dict[str, Any]]:
+    """
+    Initialize Gemini client using the official SDK (if installed) and environment variables.
+
+    Environment variables (should be managed by orchestrator; do not read .env directly here):
+        GEMINI_API_KEY: API key for Google AI
+        GEMINI_MODEL_NAME: Optional, e.g., "gemini-1.5-pro" or "gemini-1.5-flash"
+        GEMINI_ENABLED: "1"/"true" to enable LLM usage in this module
+
+    Returns:
+        dict with {"genai": module, "model_name": str} or None if not enabled/unavailable.
+    """
+    # Only enable if explicitly toggled via env
+    if not _is_truthy_env(os.getenv("GEMINI_ENABLED")):
+        return None
+
+    genai = _try_import_gemini_sdk()
+    if genai is None:
+        # SDK not installed; caller gets graceful fallback to heuristics.
+        return None
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        # No API key provided; do not initialize.
+        return None
+
+    try:
+        genai.configure(api_key=api_key)
+        model_name = os.getenv("GEMINI_MODEL_NAME") or "gemini-1.5-flash"
+        # We don't instantiate the model object globally to keep import-time light.
+        return {"genai": genai, "model_name": model_name}
+    except Exception:
+        return None
+
+
+def _gemini_generate_text(prompt: str, client: Optional[Dict[str, Any]], safety: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Use the Gemini SDK to generate text for a given prompt.
+
+    Args:
+        prompt: The text prompt to send to the model.
+        client: The dict returned by _init_gemini_client().
+        safety: Optional dict to pass additional parameters (e.g., generation_config).
+
+    Returns:
+        The generated text (string) or None if generation fails or client is None.
+    """
+    if not client:
+        return None
+    try:
+        model_name = client["model_name"]
+        genai = client["genai"]
+        # Create a GenerativeModel and call generate_content
+        model = genai.GenerativeModel(model_name)
+        generation_config = (safety or {}).get("generation_config") or {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
+            "max_output_tokens": 512,
+        }
+        response = model.generate_content(prompt, generation_config=generation_config)
+        # Depending on SDK version, text may be in response.text or within candidates
+        text = getattr(response, "text", None)
+        if text:
+            return str(text)
+        # Fallback parse
+        try:
+            cands = getattr(response, "candidates", None)
+            if cands and len(cands) > 0:
+                parts = getattr(cands[0], "content", None)
+                if parts and getattr(parts, "parts", None):
+                    return "".join(getattr(p, "text", "") for p in parts.parts if hasattr(p, "text"))
+        except Exception:
+            pass
+        return None
+    except Exception:
+        return None
+
+
+def _gemini_correct_text_if_enabled(text: str, lang: Optional[str], client: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    If Gemini SDK is enabled, request a lightly-edited version of the subtitle cue text
+    constrained by OTT guidelines (no hallucinations, keep semantics).
+
+    Returns the corrected text or None if not available.
+    """
+    if not client:
+        return None
+    # Craft a tightly-scoped instruction to minimize hallucination and preserve content
+    language_hint = (lang or "en").lower()
+    prompt = (
+        "You are a subtitle editor. Improve grammar and punctuation of the following subtitle text "
+        "without adding or removing semantic content. Keep names and entities intact. "
+        "Respect OTT guidelines: max ~42 characters per line, max 2 lines. "
+        "Return ONLY the corrected subtitle text, with line breaks if needed. "
+        f"Language: {language_hint}.\n\n"
+        f"Subtitle:\n{text.strip()}"
+    )
+    return _gemini_generate_text(prompt, client)
 
 
 def _normalize_text(s: str) -> str:
@@ -160,19 +288,49 @@ def _embedding_cosine(a: str, b: str, model_loader: Optional[Callable[[], Any]])
         return 0.0
 
 
+def _gemini_similarity_hint(sub_text: str, span_text: str, client: Optional[Dict[str, Any]]) -> float:
+    """
+    Optionally query Gemini to estimate semantic closeness between a subtitle and a transcript span.
+
+    Returns:
+        float similarity in [0,1], or 0.0 if unavailable.
+    """
+    if not client:
+        return 0.0
+    # Keep the request tiny to save tokens; ask for a number between 0 and 1.
+    prompt = (
+        "Rate the semantic similarity between the two snippets on a scale from 0.0 to 1.0.\n"
+        "Respond with only the number (e.g., 0.82) and nothing else.\n\n"
+        f"A: {sub_text}\n"
+        f"B: {span_text}\n"
+    )
+    out = _gemini_generate_text(prompt, client)
+    if not out:
+        return 0.0
+    try:
+        val = float(re.findall(r"[0-1](?:\.\d+)?", out.strip())[0])
+        return _clip(val, 0.0, 1.0)
+    except Exception:
+        return 0.0
+
+
 def _hybrid_score(
     sub_text: str,
     span_text: str,
     weights: Dict[str, float],
     model_loader: Optional[Callable[[], Any]],
+    *,
+    gemini_client: Optional[Dict[str, Any]] = None,
 ) -> float:
-    """Weighted combination of RapidFuzz metrics and embedding cosine."""
+    """Weighted combination of RapidFuzz metrics, embedding cosine, and optional Gemini similarity."""
     pr, tr = _rf_scores(sub_text, span_text)
     emb = _embedding_cosine(sub_text, span_text, model_loader)
+    gsim = _gemini_similarity_hint(sub_text, span_text, gemini_client) if gemini_client else 0.0
     return (
-        weights.get("rapidfuzz_partial", 0.4) * pr
-        + weights.get("rapidfuzz_token", 0.4) * tr
+        weights.get("rapidfuzz_partial", 0.35) * pr
+        + weights.get("rapidfuzz_token", 0.35) * tr
         + weights.get("embedding", 0.2) * emb
+        + weights.get("gemini", 0.1) * gsim
     )
 
 
@@ -187,6 +345,7 @@ def _best_transcript_span_for_sub(
     weights: Optional[Dict[str, float]] = None,
     model_loader: Optional[Callable[[], Any]] = None,
     raw_sub_text: Optional[str] = None,
+    gemini_client: Optional[Dict[str, Any]] = None,
 ) -> Tuple[int, int, float]:
     """
     Find the best contiguous span [i, j] of transcript segments starting from start_idx within max_span
@@ -206,7 +365,13 @@ def _best_transcript_span_for_sub(
                 span_tokens = _tokens(span_text)
                 score = _jaccard(sub_tokens, span_tokens)
             else:
-                score = _hybrid_score(raw_sub_text or " ".join(sub_tokens), span_text, weights or {}, model_loader)
+                score = _hybrid_score(
+                    raw_sub_text or " ".join(sub_tokens),
+                    span_text,
+                    weights or {},
+                    model_loader,
+                    gemini_client=gemini_client,
+                )
             if score > best_score:
                 best_i, best_j, best_score = i, j, score
     if best_score < min_sim:
@@ -487,11 +652,31 @@ def correct_subtitle_text(
     use_language_tool: bool = True,
     max_chars_per_line: int = 42,
     max_lines: int = 2,
+    use_gemini_if_available: bool = True,
 ) -> str:
-    """Correct grammar/spelling and format a subtitle cue text."""
+    """
+    Correct grammar/spelling and format a subtitle cue text.
+
+    If the official Gemini SDK is available and enabled via environment (GEMINI_ENABLED=1, GEMINI_API_KEY set),
+    the function will first attempt a conservative LLM rewrite constrained by OTT rules; if it fails or is disabled,
+    it falls back to local heuristics and language-tool when available.
+    """
     lang = (lang or "en").lower()
     original = text or ""
 
+    # Try Gemini LLM correction first (optional)
+    corrected_via_llm: Optional[str] = None
+    gemini_client = _init_gemini_client() if use_gemini_if_available else None
+    if gemini_client:
+        llm_out = _gemini_correct_text_if_enabled(original, lang, gemini_client)
+        if isinstance(llm_out, str) and llm_out.strip():
+            corrected_via_llm = llm_out.strip()
+
+    if corrected_via_llm:
+        # Still apply final wrapping to respect display constraints
+        return "\n".join(_wrap_text(_normalize_spaces(_nfkc_normalize(corrected_via_llm)), int(max_chars_per_line or 42), int(max_lines or 2)))
+
+    # Local heuristic corrections
     normalized = _normalize_spaces(_nfkc_normalize(original))
     nlp_loader = _load_spacy_model(lang) if protect_entities else None
     spans = _spacy_protect_entities(normalized, nlp_loader) if protect_entities else [(normalized, False)]
@@ -664,6 +849,9 @@ def align_subtitles_to_transcript(
 
     model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
 
+    # Initialize Gemini client once (optional; requires GEMINI_ENABLED and GEMINI_API_KEY)
+    gemini_client = _init_gemini_client()
+
     aligned: List[Dict] = []
     t_idx = 0
 
@@ -683,6 +871,7 @@ def align_subtitles_to_transcript(
             weights=fuzzy_weights,
             model_loader=model_loader,
             raw_sub_text=sub_text,
+            gemini_client=gemini_client,
         )
 
         new_cue = dict(cue)

@@ -19,3 +19,9 @@ language-tool-python>=2.7.1
 sentence-transformers>=3.0.1
 python-srt>=3.5.2
 langid>=1.1.6
+
+# Optional: Official Gemini SDK (install in your environment to enable LLM-based correction/alignment)
+# google-generativeai>=0.7.0
+
+# Optional: Official Gemini SDK (install in your environment to enable LLM-based correction/alignment)
+# google-generativeai>=0.7.0

@@ -42,9 +42,23 @@ FastAPI service providing endpoints for subtitle quality check, generation, tran
 - This reference implementation uses an in-memory job queue for demo purposes.
 - Subtitle processing functions are deterministic stubs for CI and can be replaced with integrations to real STT/LLM and subtitle libraries later.
 
-### Local-only Correction and Alignment
+### Correction and Alignment with Optional Gemini SDK
 
-The standalone alignment module (BackendService/subtitle_alignment_standalone.py) has been refactored to use only local Python heuristics and optional local libraries. It does not perform any external API calls or require API keys.
+The standalone alignment module (BackendService/subtitle_alignment_standalone.py) supports optional integration with the official Google Gemini SDK (google-generativeai). No raw HTTP requests are used—only SDK calls.
+
+Enable Gemini usage by configuring the following environment variables (provided by the orchestrator; do not edit .env here):
+- GEMINI_ENABLED=1
+- GEMINI_API_KEY=<your-google-api-key>
+- GEMINI_MODEL_NAME=gemini-1.5-flash   # or gemini-1.5-pro, etc.
+
+Behavior:
+- If the SDK is installed and environment is enabled, subtitle text correction may use Gemini for conservative grammar/punctuation improvements while respecting OTT constraints.
+- Alignment scoring can optionally consult Gemini for a small semantic similarity hint when hybrid mode is enabled.
+- If the SDK is not installed or env is not set, the module continues using only local heuristics.
+
+Note:
+- To install the SDK in your environment: pip install google-generativeai
+- The code will gracefully skip Gemini usage if the SDK is missing; no runtime error will be raised.
 
 Notes:
 - Transcript-aware alignment uses token-based similarity (and optionally RapidFuzz/sentence-transformers if installed locally).
