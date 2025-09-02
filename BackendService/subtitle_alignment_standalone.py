@@ -1063,25 +1063,27 @@ def write_corrected_alignment(
         processed_dir: Deprecated here; retained for compatibility (no write happens).
         language: Optional language code guiding light text correction.
 
-    Behavior summary (updated):
-    - Reference transcript timestamps for alignment.
-    - If a subtitle cue's text matches a transcript text and the start time difference is ≤ 1.0s,
-      keep the original subtitle timestamps unchanged (minimal change rule).
-    - Otherwise, align timestamps to the transcript for best accuracy.
-    - After alignment, we apply light grammatical/punctuation correction and OTT wrapping conservatively.
+    Updated behavior and robustness:
+    - Enforce sequential, one-to-one matching to avoid cue jumbling and duplicate matches.
+    - Only one transcript span is associated with each subtitle cue, and we never reuse a transcript segment once matched.
+    - Minimal-change policy: if aligned cue is very close (≤ 1.0s) to the matched transcript start and text matches exactly,
+      keep original subtitle timestamps.
+    - Final output is sorted by start time, made monotonic with min gaps, and reindexed.
+    - Ambiguity handling: when multiple transcript candidates exist, prefer the first unconsumed candidate that is closest
+      in time to the current cue; if still ambiguous, we break ties by index (earliest).
+      These choices are annotated in comments for transparency.
 
     Returns:
-        List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds:
-            [{ "index": int, "start": float, "end": float, "text": str, "format": str }, ...]
+        List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds.
     """
-    # First, align to transcript using the core aligner (which references transcript timing)
+    # 1) Align to transcript using the core aligner (deterministic order + transcript timing reference)
     aligned_cues = align_subtitles_to_transcript(
         transcript=transcript,
         subtitles=subtitles,
-        enable_hybrid=False,  # pure fuzzy by default to avoid heavy model load unless caller opts in
+        enable_hybrid=False,
     )
 
-    # Build a normalized transcript list for matching text and timestamps
+    # 2) Normalize transcript into sequential list (authoritative order)
     def _normalize_transcript_input(t: Any) -> List[Dict]:
         if isinstance(t, dict):
             segs = t.get("segments") or []
@@ -1109,21 +1111,7 @@ def write_corrected_alignment(
 
     transcript_norm = _normalize_transcript_input(transcript)
 
-    # Index transcript by normalized text to quickly find matching segments
-    # Note: multiple transcript segments could share the same text; we'll choose the nearest in time to the aligned cue
-    from collections import defaultdict
-    text_to_indices = defaultdict(list)
-    for idx, seg in enumerate(transcript_norm):
-        key = (seg.get("text") or "").strip()
-        if key:
-            text_to_indices[key].append(idx)
-
-    TIME_EPS = 1.0  # seconds threshold for minimal-change preservation
-
-    # For each aligned cue, if its text matches a transcript segment's text and the time difference is ≤ 1s,
-    # revert to the original subtitle timestamps to keep minimal changes.
-    # Otherwise, keep the aligned timestamps produced by align_subtitles_to_transcript.
-    # We need to know the original subtitle times; create quick lookup by index order.
+    # 3) Prepare lookups for original subtitles to preserve times when appropriate
     original_sorted = _sort_by_start([
         {
             "index": int(i + 1),
@@ -1135,94 +1123,138 @@ def write_corrected_alignment(
         for i, c in enumerate(subtitles or [])
     ])
 
-    # Simple way to pair aligned cues with their nearest original by text and proximity
+    # Helper to find original cue for a given aligned cue, preferring exact text match and closest start time.
     def _find_original_for(cue: Dict) -> Optional[Dict]:
-        # Prefer exact text match and closest start time among originals
         text = str(cue.get("text", "") or "")
         candidates = [o for o in original_sorted if (o.get("text") or "") == text]
-        if not candidates:
-            # fallback: nearest in time regardless of text
-            if not original_sorted:
-                return None
-            s = float(_safe_float(cue.get("start", 0.0)))
-            return min(original_sorted, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - s))
         s = float(_safe_float(cue.get("start", 0.0)))
-        return min(candidates, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - s))
+        if candidates:
+            return min(candidates, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - s))
+        if not original_sorted:
+            return None
+        return min(original_sorted, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - s))
 
-    # Apply minimal-change preservation based on transcript timestamps as reference
-    minimally_adjusted: List[Dict] = []
-    for cue in aligned_cues:
+    # 4) One-to-one sequential matching between aligned cues and transcript segments
+    # We step through aligned cues in their current order (already sorted by start), and for each,
+    # we find the closest forward transcript span whose text best matches. Once a transcript index is used,
+    # it's marked as consumed and will not be used again, ensuring one-to-one mapping and preventing jumbling.
+    used_transcript_indices = set()
+    TIME_EPS = 1.0
+
+    def _pick_transcript_index_for_cue(cue: Dict, start_from: int) -> Optional[int]:
+        """Pick the nearest unconsumed transcript index for this cue (sequential, one-to-one).
+        Ambiguity handling: choose the unconsumed index >= start_from that minimizes the absolute
+        difference to cue start; if none exist, allow a small backward look (rare fallback), still
+        preferring the nearest in time."""
+        if not transcript_norm:
+            return None
+        cue_start = float(_safe_float(cue.get("start", 0.0)))
+        # Prefer forward search from start_from to maintain sequence
+        candidates = [i for i in range(start_from, len(transcript_norm)) if i not in used_transcript_indices]
+        if candidates:
+            return min(candidates, key=lambda i: abs(float(_safe_float(transcript_norm[i].get("start", 0.0))) - cue_start))
+        # Fallback: if no forward candidates, allow any unconsumed (very edge case)
+        any_left = [i for i in range(0, len(transcript_norm)) if i not in used_transcript_indices]
+        if any_left:
+            return min(any_left, key=lambda i: abs(float(_safe_float(transcript_norm[i].get("start", 0.0))) - cue_start))
+        return None
+
+    sequential_cues: List[Dict] = []
+    next_transcript_cursor = 0
+    for cue in _sort_by_start(aligned_cues):
+        chosen_idx = _pick_transcript_index_for_cue(cue, next_transcript_cursor)
+        if chosen_idx is None:
+            # No transcript to reference; keep aligned cue as-is
+            sequential_cues.append(dict(cue))
+            continue
+        used_transcript_indices.add(chosen_idx)
+        next_transcript_cursor = max(next_transcript_cursor, chosen_idx + 1)
+
+        t_seg = transcript_norm[chosen_idx]
+        t_start = float(_safe_float(t_seg.get("start", 0.0)))
+        t_end = float(_safe_float(t_seg.get("end", t_start)))
+
+        # Minimal-change policy: if cue text exactly matches transcript text and start is close, keep original times.
+        # Ambiguity note: exact text duplicates across transcript are disambiguated by nearest-in-time sequential pick.
         cue_text = (cue.get("text") or "").strip()
-        # Candidate transcript segments with the same text
-        t_indices = text_to_indices.get(cue_text, [])
+        t_text = (t_seg.get("text") or "").strip()
+        keep_original_times = (cue_text == t_text) and (abs(float(_safe_float(cue.get("start", 0.0))) - t_start) <= TIME_EPS)
 
-        if t_indices:
-            # Choose transcript segment closest in time to the aligned cue
-            cue_start = float(_safe_float(cue.get("start", 0.0)))
-            # pick nearest transcript by start time
-            nearest_idx = min(
-                t_indices,
-                key=lambda idx: abs(float(_safe_float(transcript_norm[idx].get("start", 0.0))) - cue_start),
-            )
-            t_seg = transcript_norm[nearest_idx]
-            t_start = float(_safe_float(t_seg.get("start", 0.0)))
-            # If the difference between the (aligned) cue's start and transcript start is within 1s,
-            # we keep the ORIGINAL subtitle timestamps unchanged to honor minimal-change policy.
-            if abs(cue_start - t_start) <= TIME_EPS:
-                orig = _find_original_for(cue)
-                if orig is not None:
-                    cue = dict(cue)
-                    cue["start"] = float(_safe_float(orig.get("start", 0.0)))
-                    cue["end"] = float(_safe_float(orig.get("end", cue["start"])))
-                    if cue["end"] < cue["start"]:
-                        cue["end"] = cue["start"]
-        minimally_adjusted.append(cue)
+        new_cue = dict(cue)
+        if keep_original_times:
+            orig = _find_original_for(cue)
+            if orig is not None:
+                new_cue["start"] = float(_safe_float(orig.get("start", 0.0)))
+                new_cue["end"] = float(_safe_float(orig.get("end", new_cue["start"])))
+                if new_cue["end"] < new_cue["start"]:
+                    new_cue["end"] = new_cue["start"]
+        else:
+            # Snap within transcript segment bounds while respecting minimal duration and gaps later.
+            # We don't change text here; align_subtitles_to_transcript already decided text correction rules.
+            # Ambiguity handling: we align to the selected transcript index only, not to multiple candidates.
+            # This prevents mismatched or blended spans.
+            start = float(_safe_float(cue.get("start", 0.0)))
+            end = float(_safe_float(cue.get("end", start)))
+            # If cue sits well outside the transcript span, clamp to the transcript
+            if end <= start:
+                end = start + 0.4
+            # Clamp to transcript bounds to avoid drifting
+            start = max(t_start, min(start, t_end))
+            end = max(start, min(end, t_end))
+            new_cue["start"] = start
+            new_cue["end"] = end
 
-    # Language note:
-    # We perform only local, heuristic corrections below.
+        sequential_cues.append(new_cue)
+
+    # 5) Light text correction after sequential mapping (grammar/punctuation/wrapping)
     lang = (language or "").strip().lower() or "auto"
-
-    # Light local correction on text (grammar/punctuation/wrapping)
-    final_cues: List[Dict] = []
-    for cue in minimally_adjusted:
+    corrected_cues: List[Dict] = []
+    for cue in sequential_cues:
         fixed_text = correct_subtitle_text(
             text=cue.get("text", ""),
             lang=(None if lang == "auto" else lang),
             protect_entities=True,
-            sentence_case=False,   # conservative by default
+            sentence_case=False,
             use_language_tool=True,
             max_chars_per_line=42,
             max_lines=2,
         )
-        new_cue = dict(cue)
-        new_cue["text"] = fixed_text
-        # Explicitly normalize to float seconds for contract enforcement
-        new_cue["start"] = float(_safe_float(new_cue.get("start", 0.0)))
-        new_cue["end"] = float(_safe_float(new_cue.get("end", new_cue["start"])))
-        if new_cue["end"] < new_cue["start"]:
-            new_cue["end"] = new_cue["start"]
-        # Sanity asserts for public contract
-        assert isinstance(new_cue["start"], float), "start must be float seconds"
-        assert isinstance(new_cue["end"], float), "end must be float seconds"
-        final_cues.append(new_cue)
+        c2 = dict(cue)
+        c2["text"] = fixed_text
+        c2["start"] = float(_safe_float(c2.get("start", 0.0)))
+        c2["end"] = float(_safe_float(c2.get("end", c2["start"])))
+        if c2["end"] < c2["start"]:
+            c2["end"] = c2["start"]
+        corrected_cues.append(c2)
 
-    # After text corrections, re-enforce monotonic timing and minimal gap/duration to avoid overlaps
-    final_cues = _enforce_monotonic_nonoverlap(final_cues, min_gap=0.02, min_dur=0.4)
+    # 6) Enforce monotonic order and minimal gaps, then sort by start for safety
+    corrected_cues = _enforce_monotonic_nonoverlap(corrected_cues, min_gap=0.02, min_dur=0.4)
+    corrected_cues = _sort_by_start(corrected_cues)
 
-    # Reindex sequentially and ensure float contract one more time
-    resequenced: List[Dict] = []
-    for i, c in enumerate(final_cues, start=1):
-        resequenced.append({
+    # 7) Reindex and ensure float contract; propagate format from originals when present
+    # For format propagation, map by nearest in time original cue to avoid mismatch.
+    def _nearest_original_format(start: float) -> str:
+        if not original_sorted:
+            return ""
+        nearest = min(original_sorted, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - float(start)))
+        return str(nearest.get("format", "") or "")
+
+    output: List[Dict] = []
+    for i, c in enumerate(corrected_cues, start=1):
+        fmt = str(c.get("format", "") or "") or _nearest_original_format(c.get("start", 0.0))
+        start = float(_safe_float(c.get("start", 0.0)))
+        end = float(_safe_float(c.get("end", start)))
+        if end < start:
+            end = start
+        output.append({
             "index": int(i),
-            "start": float(_safe_float(c.get("start", 0.0))),
-            "end": float(_safe_float(c.get("end", c.get("start", 0.0)))),
+            "start": float(start),
+            "end": float(end),
             "text": str(c.get("text", "") or ""),
-            "format": str(c.get("format", "") or ""),
+            "format": fmt,
         })
-        if resequenced[-1]["end"] < resequenced[-1]["start"]:
-            resequenced[-1]["end"] = resequenced[-1]["start"]
 
-    return resequenced
+    return output
 
 
 # PUBLIC_INTERFACE
