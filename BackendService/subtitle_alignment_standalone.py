@@ -1110,7 +1110,23 @@ def write_corrected_alignment(
         assert isinstance(new_cue["end"], float), "end must be float seconds"
         final_cues.append(new_cue)
 
-    return final_cues
+    # After text corrections, re-enforce monotonic timing and minimal gap/duration to avoid overlaps
+    final_cues = _enforce_monotonic_nonoverlap(final_cues, min_gap=0.02, min_dur=0.4)
+
+    # Reindex sequentially and ensure float contract one more time
+    resequenced: List[Dict] = []
+    for i, c in enumerate(final_cues, start=1):
+        resequenced.append({
+            "index": int(i),
+            "start": float(_safe_float(c.get("start", 0.0))),
+            "end": float(_safe_float(c.get("end", c.get("start", 0.0)))),
+            "text": str(c.get("text", "") or ""),
+            "format": str(c.get("format", "") or ""),
+        })
+        if resequenced[-1]["end"] < resequenced[-1]["start"]:
+            resequenced[-1]["end"] = resequenced[-1]["start"]
+
+    return resequenced
 
 
 # PUBLIC_INTERFACE
