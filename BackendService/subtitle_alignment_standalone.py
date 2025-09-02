@@ -1113,6 +1113,226 @@ def write_corrected_alignment(
     return final_cues
 
 
+# PUBLIC_INTERFACE
+def align_subtitles(
+    transcript: Union[List[Dict], Dict[str, Any]],
+    subtitles: List[Dict],
+) -> List[Dict]:
+    """Align subtitles against an authoritative transcript.
+
+    PUBLIC_INTERFACE
+    Implements the following policy:
+    1) If text matches (case-insensitive normalized), but timestamps differ by > 1s, use the transcript's timestamps.
+    2) If timestamps match (within 1s) but text differs, use the transcript text. Optionally, an LLM could be used to
+       decide, but by default transcript text is preferred.
+    3) Insert or remove subtitles so the output sequence matches the transcript's sequencing and content (treating the
+       transcript as the authoritative source).
+
+    Inputs:
+        transcript: Whisper-like segments list or dict with "segments":
+            - Either a list of dicts with keys: text, start, end
+            - Or dict {"segments": [ ...same as above... ]}
+        subtitles: list of dicts with shape:
+            - index: int
+            - start: float seconds (or a string that can be parsed)
+            - end: float seconds (or a string that can be parsed)
+            - text: str
+            - format: str
+
+    Returns:
+        A list of dicts with the same keys as the input subtitles (index, start, end, text, format),
+        sequenced to match the transcript order and content. Timestamps are float seconds.
+
+    Notes:
+        - This function does not attempt semantic LLM checks; it follows the simple prioritization rules above.
+        - Normalization uses case-insensitive tokenization stripping punctuation for text matching.
+    """
+    # Reuse aligner machinery to match transcript spans, then override with rules specified.
+    # Normalize transcript segments
+    if isinstance(transcript, dict):
+        t_raw = transcript.get("segments") or []
+        if not isinstance(t_raw, list):
+            t_raw = []
+        t_list = t_raw
+    elif isinstance(transcript, list):
+        t_list = transcript
+    else:
+        raise TypeError("transcript must be a list or dict with 'segments'")
+
+    def _maybe_timecode_to_seconds(v: Any) -> float:
+        if isinstance(v, (int, float)):
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        if isinstance(v, str):
+            m = re.match(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})", v.strip())
+            if m:
+                h, mi, s, ms = m.groups()
+                return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+        try:
+            return float(v)
+        except Exception:
+            return 0.0
+
+    transcript_segs: List[Dict[str, Any]] = []
+    for seg in t_list:
+        if not isinstance(seg, dict):
+            # Coerce unknown types to text-only segments with zeroed time
+            transcript_segs.append({"text": str(seg), "start": 0.0, "end": 0.0})
+            continue
+        st = _maybe_timecode_to_seconds(seg.get("start", 0.0))
+        en = _maybe_timecode_to_seconds(seg.get("end", 0.0))
+        if en < st:
+            en = st
+        transcript_segs.append(
+            {"text": str(seg.get("text", "") or ""), "start": float(st), "end": float(en)}
+        )
+    transcript_segs = _sort_by_start(transcript_segs)
+
+    # Normalize subtitles; also detect and propagate common format
+    sub_cues: List[Dict[str, Any]] = []
+    common_format = ""
+    for idx, c in enumerate(subtitles or [], start=1):
+        c = c or {}
+        if not isinstance(c, dict):
+            c = {"text": str(c)}
+        st = _maybe_timecode_to_seconds(c.get("start", 0.0))
+        en = _maybe_timecode_to_seconds(c.get("end", 0.0))
+        if en < st:
+            en = st
+        fmt = c.get("format")
+        fmt = str(fmt).strip() if isinstance(fmt, str) else ""
+        if not common_format and fmt:
+            common_format = fmt
+        sub_cues.append(
+            {
+                "index": int(c.get("index", idx) or idx),
+                "start": float(st),
+                "end": float(en),
+                "text": str(c.get("text", "") or ""),
+                "format": fmt,
+            }
+        )
+    sub_cues = _sort_by_start(sub_cues)
+
+    # If no transcript, return cleaned subtitles
+    if not transcript_segs:
+        out: List[Dict] = []
+        for i, c in enumerate(sub_cues, start=1):
+            out.append(
+                {
+                    "index": i,
+                    "start": float(_safe_float(c.get("start", 0.0))),
+                    "end": float(_safe_float(c.get("end", c.get("start", 0.0)))),
+                    "text": str(c.get("text", "") or ""),
+                    "format": common_format,
+                }
+            )
+        return out
+
+    # Build output strictly from transcript: one output cue per transcript segment
+    # Match each transcript segment to the best subtitle cue for comparison of "timestamps match?" and "text match?"
+    # Time-match threshold
+    TIME_EPS = 1.0  # seconds
+
+    # Precompute normalized texts for quick compare
+    def _norm(s: str) -> str:
+        return _normalize_text(s or "")
+
+    # For each transcript segment, find closest subtitle cue by time overlap
+    def _time_overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+        lo = max(a_start, b_start)
+        hi = min(a_end, b_end)
+        return max(0.0, hi - lo)
+
+    used_subs = set()
+    aligned_output: List[Dict] = []
+    # Keep original format for output (if none in inputs, keep "")
+    out_format = common_format
+
+    for i, seg in enumerate(transcript_segs, start=1):
+        seg_text = str(seg.get("text", "") or "")
+        seg_s = float(_safe_float(seg.get("start", 0.0)))
+        seg_e = float(_safe_float(seg.get("end", seg_s)))
+
+        # Find best overlapping subtitle cue
+        best_idx = -1
+        best_overlap = -1.0
+        for j, sc in enumerate(sub_cues):
+            if j in used_subs:
+                continue
+            s_s = float(_safe_float(sc.get("start", 0.0)))
+            s_e = float(_safe_float(sc.get("end", s_s)))
+            ov = _time_overlap(seg_s, seg_e, s_s, s_e)
+            if ov > best_overlap:
+                best_overlap = ov
+                best_idx = j
+
+        chosen_sub = sub_cues[best_idx] if best_idx >= 0 else None
+        # Apply rules:
+        if chosen_sub:
+            used_subs.add(best_idx)
+            s_text = str(chosen_sub.get("text", "") or "")
+            # Text match (normalized)
+            text_matches = _norm(s_text) == _norm(seg_text)
+            # Timestamp match within 1s threshold
+            s_s = float(_safe_float(chosen_sub.get("start", 0.0)))
+            s_e = float(_safe_float(chosen_sub.get("end", s_s)))
+            times_match = (abs(s_s - seg_s) <= TIME_EPS) and (abs(s_e - seg_e) <= TIME_EPS)
+
+            if text_matches and not times_match:
+                # Rule 1: use transcript timestamps, keep text (same)
+                out_text = s_text  # same as seg_text effectively
+                out_start, out_end = seg_s, seg_e
+            elif times_match and not text_matches:
+                # Rule 2: use transcript text, keep times (times already ~equal to transcript, but to be safe use seg times)
+                # The instruction says timestamps match -> use transcript text; we will output transcript's times as well
+                # to keep transcript authoritative and consistent.
+                out_text = seg_text
+                out_start, out_end = seg_s, seg_e
+            else:
+                # If both match or both differ:
+                # - If both match: keep transcript timestamps (authoritative) and keep one text; prefer transcript text.
+                # - If both differ: follow transcript as authority for both text and time.
+                out_text = seg_text
+                out_start, out_end = seg_s, seg_e
+        else:
+            # No matching subtitle => insertion to match transcript sequence
+            out_text = seg_text
+            out_start, out_end = seg_s, seg_e
+
+        aligned_output.append(
+            {
+                "index": i,
+                "start": float(out_start),
+                "end": float(out_end if out_end >= out_start else out_start),
+                "text": out_text,
+                "format": out_format,
+            }
+        )
+
+    # We have matched each transcript segment to one output cue.
+    # Any subtitles not used are effectively removed per rule 3 (transcript is authoritative).
+    # Ensure monotonic non-overlap and minimal duration hygiene
+    aligned_output = _enforce_monotonic_nonoverlap(aligned_output, min_gap=0.0, min_dur=0.0)
+
+    # Reindex final output
+    for k, c in enumerate(aligned_output, start=1):
+        c["index"] = k
+        # Ensure float seconds
+        c["start"] = float(_safe_float(c.get("start", 0.0)))
+        c["end"] = float(_safe_float(c.get("end", c["start"])))
+        if c["end"] < c["start"]:
+            c["end"] = c["start"]
+
+    return aligned_output
+
+
 if __name__ == "__main__":
     # Simple manual demo for quick testing when running this file directly.
     # This demo uses only local heuristics with no external API calls.
