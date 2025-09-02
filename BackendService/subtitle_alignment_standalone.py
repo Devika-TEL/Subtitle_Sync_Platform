@@ -5,7 +5,7 @@ This file is self-contained and does not import any project-local modules.
 It provides a public interface for transcript-based subtitle alignment and
 light text correction suitable for OTT-style constraints.
 
-Alignment policy (updated):
+Alignment policy (refined and documented):
 - Exact text matches: If a subtitle's text exactly matches its corresponding transcript text, the subtitle's timestamps
   are snapped to the transcript's timestamps (authoritative timing).
 - Non-exact matches: The module optionally queries Gemini to judge semantic equivalence.
@@ -42,9 +42,10 @@ Gemini integration:
 - The code attempts to import google.generativeai; if missing, it will gracefully skip LLM calls.
 - All Gemini usage is optional and guarded; local heuristics remain the default behavior.
 
-PUBLIC_INTERFACE:
+PUBLIC_INTERFACES:
 - write_corrected_alignment(transcript, subtitles, processed_dir=None, language=None) -> List[Dict]
-  Create corrected, aligned subtitles and return as list of dicts (no file I/O)
+- align_subtitles_to_transcript(transcript, subtitles, ...) -> List[Dict]
+- align_subtitles(transcript, subtitles) -> List[Dict]
 """
 
 from __future__ import annotations
@@ -53,7 +54,6 @@ from typing import List, Dict, Any, Optional, Tuple, Callable, Union
 import re
 import logging
 from math import isfinite
-import json
 import os
 
 
@@ -94,24 +94,20 @@ def _init_gemini_client() -> Optional[Dict[str, Any]]:
     Returns:
         dict with {"genai": module, "model_name": str} or None if not enabled/unavailable.
     """
-    # Only enable if explicitly toggled via env
     if not _is_truthy_env(os.getenv("GEMINI_ENABLED")):
         return None
 
     genai = _try_import_gemini_sdk()
     if genai is None:
-        # SDK not installed; caller gets graceful fallback to heuristics.
         return None
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        # No API key provided; do not initialize.
         return None
 
     try:
         genai.configure(api_key=api_key)
         model_name = os.getenv("GEMINI_MODEL_NAME") or "gemini-1.5-flash"
-        # We don't instantiate the model object globally to keep import-time light.
         return {"genai": genai, "model_name": model_name}
     except Exception:
         return None
@@ -134,7 +130,6 @@ def _gemini_generate_text(prompt: str, client: Optional[Dict[str, Any]], safety:
     try:
         model_name = client["model_name"]
         genai = client["genai"]
-        # Create a GenerativeModel and call generate_content
         model = genai.GenerativeModel(model_name)
         generation_config = (safety or {}).get("generation_config") or {
             "temperature": 0.2,
@@ -143,11 +138,9 @@ def _gemini_generate_text(prompt: str, client: Optional[Dict[str, Any]], safety:
             "max_output_tokens": 512,
         }
         response = model.generate_content(prompt, generation_config=generation_config)
-        # Depending on SDK version, text may be in response.text or within candidates
         text = getattr(response, "text", None)
         if text:
             return str(text)
-        # Fallback parse
         try:
             cands = getattr(response, "candidates", None)
             if cands and len(cands) > 0:
@@ -170,7 +163,6 @@ def _gemini_correct_text_if_enabled(text: str, lang: Optional[str], client: Opti
     """
     if not client:
         return None
-    # Craft a tightly-scoped instruction to minimize hallucination and preserve content
     language_hint = (lang or "en").lower()
     prompt = (
         "You are a subtitle editor. Improve grammar and punctuation of the following subtitle text "
@@ -214,7 +206,7 @@ def _safe_float(v, default=0.0) -> float:
 
 
 def _sort_by_start(items: List[Dict]) -> List[Dict]:
-    # Be defensive: if items may include non-dicts (e.g., strings), coerce to dicts with text only
+    """Sort list of dict-like items by 'start', being defensive against non-dict items."""
     normed: List[Dict] = []
     for it in items:
         if isinstance(it, dict):
@@ -277,7 +269,6 @@ def _lazy_st_model_loader(model_name: str) -> Callable[[], Any]:
     def _load():
         if model_ref["model"] is None:
             from sentence_transformers import SentenceTransformer  # type: ignore
-
             model_ref["model"] = SentenceTransformer(model_ref["name"])
         return model_ref["model"]
 
@@ -310,7 +301,6 @@ def _gemini_similarity_hint(sub_text: str, span_text: str, client: Optional[Dict
     """
     if not client:
         return 0.0
-    # Keep the request tiny to save tokens; ask for a number between 0 and 1.
     prompt = (
         "Rate the semantic similarity between the two snippets on a scale from 0.0 to 1.0.\n"
         "Respond with only the number (e.g., 0.82) and nothing else.\n\n"
@@ -371,7 +361,6 @@ def _best_transcript_span_for_sub(
     - If hybrid=True: use weighted RapidFuzz + Embedding cosine (and optional Gemini score if provided).
     Returns (i, j_inclusive, score). If no span exceeds min_sim, returns (start_idx, start_idx, 0.0).
     """
-    # Fast-path: exact literal match snap
     if raw_sub_text:
         sub_stripped = (raw_sub_text or "").strip()
         for k in range(start_idx, min(len(transcript), start_idx + max_span)):
@@ -433,20 +422,15 @@ def _distribute_time_within_span_with_delayed_fix(
     span_end = float(span_end)
     base_start = max(span_start, last_end + min_gap)
 
-    # Detect delayed start: if base_start is significantly after span_start, snap earlier
     if base_start - span_start > delay_threshold:
-        # pull start towards span_start but keep minimal gap after last_end
         base_start = max(span_start + min_gap, last_end + min_gap)
 
-    # Compute duration from text
     est_dur = _calc_reading_duration(sub_text, chars_per_sec, min_duration, max_duration)
     est_end = min(base_start + est_dur, span_end)
 
-    # Ensure at least min_duration; if cannot extend, shift earlier within span
     if est_end - base_start < min_duration:
         est_end = min(span_end, base_start + min_duration)
         if est_end - base_start < min_duration and span_end - span_start >= min_duration:
-            # try shifting start back if possible (bounded by span_start)
             base_start = max(span_start, est_end - min_duration)
 
     return (float(base_start), float(max(base_start + min_duration, est_end)))
@@ -463,7 +447,6 @@ def _enforce_monotonic_nonoverlap(
     - Ensures duration >= min_dur (expanding end if necessary)
     """
     result = _sort_by_start(subs)
-    # First pass: enforce monotonic starts and min duration
     for i, s in enumerate(result):
         old_start = _safe_float(s.get("start", 0.0))
         old_end = _safe_float(s.get("end", 0.0))
@@ -475,7 +458,6 @@ def _enforce_monotonic_nonoverlap(
         if end <= start + min_dur:
             end = start + min_dur
         s["start"], s["end"] = start, max(end, start)
-    # Second pass: ensure next starts after current with min gap; if needed, extend next
     for i in range(len(result) - 1):
         cur = result[i]
         nxt = result[i + 1]
@@ -504,7 +486,6 @@ def _nfkc_normalize(text: str) -> str:
 def _normalize_spaces(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _TRAILING_SPACES_RE.sub("", text)
-    # Collapse multiple spaces but preserve newlines
     return "\n".join(_PUNCT_SPACE_RE.sub(" ", ln).strip() for ln in text.splitlines())
 
 
@@ -592,7 +573,6 @@ def _apply_language_tool(text: str, lang: str) -> str:
     """
     try:
         import language_tool_python  # type: ignore
-        # Try Public API first
         try:
             tool = language_tool_python.LanguageToolPublicAPI(lang.lower() or "en")
             matches = tool.check(text)
@@ -607,18 +587,15 @@ def _apply_language_tool(text: str, lang: str) -> str:
 
 def _normalize_punctuation(text: str) -> str:
     text = text.replace(" ,", ",").replace(" .", ".").replace(" !", "!").replace(" ?", "?")
-    text = re.sub(r"\s+([,\.!?;:])", r"\1", text)
-    text = re.sub(r"([\(\[])\\s+", r"\1", text)
+    text = re.sub(r"\s+([,\.\!\?;:])", r"\1", text)
+    text = re.sub(r"([\(\[])\s+", r"\1", text)
     text = re.sub(r"\s+([\)\]])", r"\1", text)
     return text
 
 
 def _wrap_text(text: str, max_chars_per_line: int, max_lines: int) -> List[str]:
     """
-    Greedy word-wrapping for subtitle cues:
-    - Do not exceed max_chars_per_line
-    - Try to balance two lines by length if max_lines == 2
-    - If single word exceeds max, hard-break
+    Greedy word-wrapping for subtitle cues.
     """
     words = text.split()
     if not words:
@@ -667,65 +644,6 @@ def _wrap_text(text: str, max_chars_per_line: int, max_lines: int) -> List[str]:
     return fixed[:max_lines]
 
 
-# PUBLIC_INTERFACE
-def correct_subtitle_text(
-    text: str,
-    lang: Optional[str] = None,
-    *,
-    protect_entities: bool = True,
-    sentence_case: bool = True,
-    use_language_tool: bool = True,
-    max_chars_per_line: int = 42,
-    max_lines: int = 2,
-    use_gemini_if_available: bool = True,
-) -> str:
-    """
-    Correct grammar/spelling and format a subtitle cue text.
-
-    If the official Gemini SDK is available and enabled via environment (GEMINI_ENABLED=1, GEMINI_API_KEY set),
-    the function will first attempt a conservative LLM rewrite constrained by OTT rules; if it fails or is disabled,
-    it falls back to local heuristics and language-tool when available.
-    """
-    lang = (lang or "en").lower()
-    original = text or ""
-
-    # Try Gemini LLM correction first (optional)
-    corrected_via_llm: Optional[str] = None
-    gemini_client = _init_gemini_client() if use_gemini_if_available else None
-    if gemini_client:
-        llm_out = _gemini_correct_text_if_enabled(original, lang, gemini_client)
-        if isinstance(llm_out, str) and llm_out.strip():
-            corrected_via_llm = llm_out.strip()
-
-    if corrected_via_llm:
-        # Still apply final wrapping to respect display constraints
-        return "\n".join(_wrap_text(_normalize_spaces(_nfkc_normalize(corrected_via_llm)), int(max_chars_per_line or 42), int(max_lines or 2)))
-
-    # Local heuristic corrections
-    normalized = _normalize_spaces(_nfkc_normalize(original))
-    nlp_loader = _load_spacy_model(lang) if protect_entities else None
-    spans = _spacy_protect_entities(normalized, nlp_loader) if protect_entities else [(normalized, False)]
-
-    corrected_parts: List[str] = []
-    for span_text, is_protected in spans:
-        part = span_text
-        if not is_protected:
-            if sentence_case:
-                part = _sentence_case(part)
-            if use_language_tool:
-                part = _apply_language_tool(part, lang)
-            part = _normalize_punctuation(part)
-        corrected_parts.append(part)
-
-    corrected = "".join(corrected_parts)
-    corrected = _normalize_spaces(corrected)
-    wrapped = "\n".join(_wrap_text(corrected, int(max_chars_per_line or 42), int(max_lines or 2)))
-    return wrapped
-
-
-# ---------------------------
-# Core alignment
-# ---------------------------
 def _get_logger(verbose: bool, logger: Optional[logging.Logger]) -> Optional[logging.Logger]:
     """Return logger instance according to verbose and provided logger."""
     if logger is not None:
@@ -747,7 +665,6 @@ def align_subtitles_to_transcript(
     min_gap: float = 0.02,
     verbose: bool = False,
     logger: Optional[logging.Logger] = None,
-    # Advanced toggles (no project config dependency; use provided or defaults)
     enable_hybrid: Optional[bool] = False,
     embedding_model_name: Optional[str] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     fuzzy_weights: Optional[Dict[str, float]] = None,
@@ -756,24 +673,28 @@ def align_subtitles_to_transcript(
     delayed_start_threshold: Optional[float] = 0.5,
 ) -> List[Dict]:
     """
-    Align subtitles' start/end timings and text to a reference transcript.
+    Align subtitles to a reference transcript.
 
-    Rules implemented:
-    1) If subtitle text and the matched transcript text are exactly the same (literal match) but timestamps differ,
-       snap the subtitle start/end to the transcript span timings.
-    2) If texts do not match literally, use Gemini SDK (if enabled via env) to test if they are semantically equivalent.
-       - If semantically equivalent, keep the subtitle text and snap its timestamps to the transcript span timings.
-       - If not semantically equivalent (or Gemini unavailable), correct the subtitle text to exactly match the transcript
-         span text and align timestamps to the transcript.
-    3) Transcript is the authority whenever semantic parity is not met.
+    Matching logic (clearly documented):
+    - Search in-order from a moving transcript cursor to prevent jumping backwards and reusing spans.
+    - Within a window of max_span, evaluate contiguous transcript spans against the current subtitle cue using:
+        * Jaccard similarity over normalized tokens (default), or
+        * A hybrid score (RapidFuzz + embeddings + optional Gemini similarity) when enabled.
+    - Fast-path: if any single transcript segment exactly equals the subtitle text (literal), snap to it immediately.
 
-    Contract:
-    - Inputs may contain numeric seconds, strings, or SRT-like timecodes for 'start'/'end'.
-    - All inputs are normalized to float seconds internally.
-    - The returned list always uses float seconds for 'start' and 'end' (no strings/timecodes).
-    - Gemini integration requires environment variables:
-        GEMINI_ENABLED=1, GEMINI_API_KEY, optional GEMINI_MODEL_NAME
-      If not available, semantic checks fall back to hybrid/fuzzy or simple heuristics only.
+    Minimal-change strategies:
+    - If texts are equal or semantically equivalent (Gemini, when available), keep the subtitle text and use transcript times.
+    - If not equivalent, prefer transcript text for the cue to avoid semantic drift.
+    - For cues with no acceptable match (score < min_similarity), keep original text and minimally adjust times for duration.
+
+    Edge cases handled:
+    - Non-dict inputs or missing fields (start/end/text) are coerced safely.
+    - Timecodes (HH:MM:SS,mmm) or floats are normalized to float seconds on input; outputs are always floats.
+    - Overlaps and zero/negative durations are corrected; final pass enforces monotonic, non-overlapping timing.
+    - For large delays relative to transcript start within a span, start is snapped closer to the span start while keeping gaps.
+
+    Returns:
+        List of cues with float 'start'/'end' and chosen 'text'. 'format' is propagated from input when present.
     """
     # ---- Normalize transcript ----
     if isinstance(transcript, dict):
@@ -818,7 +739,9 @@ def align_subtitles_to_transcript(
             text = str(seg)
             start = 0.0
             end = 0.0
-        t_coerced.append({"text": text, "start": float(start), "end": float(end if end >= start else start)})
+        if end < start:
+            end = start
+        t_coerced.append({"text": text, "start": float(start), "end": float(end)})
     t_segments = _sort_by_start(t_coerced)
 
     # ---- Normalize subtitles ----
@@ -843,15 +766,7 @@ def align_subtitles_to_transcript(
         fmt = str(fmt).strip() if isinstance(fmt, str) else ""
         if end < start:
             end = start
-        s_raw.append(
-            {
-                "index": index,
-                "start": float(start),
-                "end": float(end),
-                "text": text,
-                "format": fmt,
-            }
-        )
+        s_raw.append({"index": index, "start": float(start), "end": float(end), "text": text, "format": fmt})
 
     # Determine common format: first non-empty wins
     common_format = ""
@@ -889,8 +804,6 @@ def align_subtitles_to_transcript(
     delayed_start_threshold = float(delayed_start_threshold or 0.5)
 
     model_loader = _lazy_st_model_loader(embedding_model_name) if enable_hybrid else None
-
-    # Initialize Gemini client once (optional; requires GEMINI_ENABLED and GEMINI_API_KEY)
     gemini_client = _init_gemini_client()
 
     aligned: List[Dict] = []
@@ -921,21 +834,16 @@ def align_subtitles_to_transcript(
             span_text = _merge_texts(span)
             span_start, span_end = _span_time(span)
 
-            # Decision 1: literal match => snap times to transcript span
             literal_match = sub_text.strip() == span_text.strip()
 
-            # Optional semantic equivalence via Gemini (only if no literal match)
             semantically_equivalent = False
             if not literal_match and gemini_client:
                 try:
                     sim = _gemini_similarity_hint(sub_text.strip(), span_text.strip(), gemini_client)
-                    # Threshold: fairly strict, but tolerant to minor paraphrase
                     semantically_equivalent = sim >= 0.85
                 except Exception:
                     semantically_equivalent = False
 
-            # Compute target times: always prefer transcript span times when we deem texts equivalent or will replace text
-            # We still distribute within span using reading-speed estimate to respect min durations and gaps.
             last_end = aligned[-1]["end"] if aligned else 0.0
             est_start, est_end = _distribute_time_within_span_with_delayed_fix(
                 sub_text=(span_text if (literal_match or semantically_equivalent or not sub_text.strip()) else sub_text),
@@ -956,17 +864,11 @@ def align_subtitles_to_transcript(
                     est_end = span_end
                     est_start = max(span_start, est_start - shift)
 
-            # Rule application on text:
-            # - If literal match: keep original subtitle text (already same) and snap times.
-            # - Else if semantic equivalent: keep subtitle text, but snap times to transcript span.
-            # - Else (not equivalent or Gemini not available): replace subtitle text with transcript span text and align times.
             if literal_match:
-                # Text unchanged; times snapped (via est_start/est_end within span)
                 new_text = sub_text
             elif semantically_equivalent:
                 new_text = sub_text
             else:
-                # Semantic mismatch: Use transcript as authority for text.
                 new_text = span_text
 
             new_cue["text"] = new_text
@@ -974,7 +876,6 @@ def align_subtitles_to_transcript(
             new_cue["end"] = float(est_end)
             t_idx = max(t_idx, j)
         else:
-            # No acceptable span: keep original timing (cleaned to min duration), do not alter text.
             start_o = _safe_float(cue.get("start", 0.0))
             end_o = _safe_float(cue.get("end", start_o + min_duration))
             if end_o - start_o < min_duration:
@@ -983,7 +884,6 @@ def align_subtitles_to_transcript(
             new_cue["end"] = float(end_o)
 
         if _logger is not None and (new_cue["start"] != orig_start or new_cue["end"] != orig_end):
-            # Indicate if text changed relative to original
             text_changed = (new_cue.get("text", "") or "") != (sub_text or "")
             _logger.info(
                 "Alignment change | cue=%d | %0.3f-->%0.3f -> %0.3f-->%0.3f | sim=%0.3f | text_changed=%s",
@@ -1012,7 +912,6 @@ def align_subtitles_to_transcript(
             "text": text_v,
             "format": common_format,
         }
-        # Enforce float seconds contract
         assert isinstance(out_item["start"], float), "start must be float seconds"
         assert isinstance(out_item["end"], float), "end must be float seconds"
         normalized.append(out_item)
@@ -1034,7 +933,7 @@ def _compose_srt(cues: List[Dict]) -> str:
         out_lines.append(f"{start} --> {end}")
         if text:
             out_lines.extend(text.splitlines())
-        out_lines.append("")  # blank line
+        out_lines.append("")
     return "\n".join(out_lines).strip() + "\n"
 
 
@@ -1043,7 +942,7 @@ def write_corrected_alignment(
     transcript: Any,
     subtitles: List[Dict],
     *,
-    processed_dir: Optional[str] = None,  # retained for signature compatibility; not used
+    processed_dir: Optional[str] = None,
     language: Optional[str] = None,
 ) -> List[Dict]:
     """Create corrected, aligned subtitles and return them as a list of dicts.
@@ -1071,19 +970,16 @@ def write_corrected_alignment(
     - Final output is sorted by start time, made monotonic with min gaps, and reindexed.
     - Ambiguity handling: when multiple transcript candidates exist, prefer the first unconsumed candidate that is closest
       in time to the current cue; if still ambiguous, we break ties by index (earliest).
-      These choices are annotated in comments for transparency.
 
     Returns:
         List[Dict]: Corrected subtitles with 'start' and 'end' guaranteed to be float seconds.
     """
-    # 1) Align to transcript using the core aligner (deterministic order + transcript timing reference)
     aligned_cues = align_subtitles_to_transcript(
         transcript=transcript,
         subtitles=subtitles,
         enable_hybrid=False,
     )
 
-    # 2) Normalize transcript into sequential list (authoritative order)
     def _normalize_transcript_input(t: Any) -> List[Dict]:
         if isinstance(t, dict):
             segs = t.get("segments") or []
@@ -1111,7 +1007,6 @@ def write_corrected_alignment(
 
     transcript_norm = _normalize_transcript_input(transcript)
 
-    # 3) Prepare lookups for original subtitles to preserve times when appropriate
     original_sorted = _sort_by_start([
         {
             "index": int(i + 1),
@@ -1123,7 +1018,6 @@ def write_corrected_alignment(
         for i, c in enumerate(subtitles or [])
     ])
 
-    # Helper to find original cue for a given aligned cue, preferring exact text match and closest start time.
     def _find_original_for(cue: Dict) -> Optional[Dict]:
         text = str(cue.get("text", "") or "")
         candidates = [o for o in original_sorted if (o.get("text") or "") == text]
@@ -1134,26 +1028,16 @@ def write_corrected_alignment(
             return None
         return min(original_sorted, key=lambda o: abs(float(_safe_float(o.get("start", 0.0))) - s))
 
-    # 4) One-to-one sequential matching between aligned cues and transcript segments
-    # We step through aligned cues in their current order (already sorted by start), and for each,
-    # we find the closest forward transcript span whose text best matches. Once a transcript index is used,
-    # it's marked as consumed and will not be used again, ensuring one-to-one mapping and preventing jumbling.
     used_transcript_indices = set()
     TIME_EPS = 1.0
 
     def _pick_transcript_index_for_cue(cue: Dict, start_from: int) -> Optional[int]:
-        """Pick the nearest unconsumed transcript index for this cue (sequential, one-to-one).
-        Ambiguity handling: choose the unconsumed index >= start_from that minimizes the absolute
-        difference to cue start; if none exist, allow a small backward look (rare fallback), still
-        preferring the nearest in time."""
         if not transcript_norm:
             return None
         cue_start = float(_safe_float(cue.get("start", 0.0)))
-        # Prefer forward search from start_from to maintain sequence
         candidates = [i for i in range(start_from, len(transcript_norm)) if i not in used_transcript_indices]
         if candidates:
             return min(candidates, key=lambda i: abs(float(_safe_float(transcript_norm[i].get("start", 0.0))) - cue_start))
-        # Fallback: if no forward candidates, allow any unconsumed (very edge case)
         any_left = [i for i in range(0, len(transcript_norm)) if i not in used_transcript_indices]
         if any_left:
             return min(any_left, key=lambda i: abs(float(_safe_float(transcript_norm[i].get("start", 0.0))) - cue_start))
@@ -1164,7 +1048,6 @@ def write_corrected_alignment(
     for cue in _sort_by_start(aligned_cues):
         chosen_idx = _pick_transcript_index_for_cue(cue, next_transcript_cursor)
         if chosen_idx is None:
-            # No transcript to reference; keep aligned cue as-is
             sequential_cues.append(dict(cue))
             continue
         used_transcript_indices.add(chosen_idx)
@@ -1174,8 +1057,6 @@ def write_corrected_alignment(
         t_start = float(_safe_float(t_seg.get("start", 0.0)))
         t_end = float(_safe_float(t_seg.get("end", t_start)))
 
-        # Minimal-change policy: if cue text exactly matches transcript text and start is close, keep original times.
-        # Ambiguity note: exact text duplicates across transcript are disambiguated by nearest-in-time sequential pick.
         cue_text = (cue.get("text") or "").strip()
         t_text = (t_seg.get("text") or "").strip()
         keep_original_times = (cue_text == t_text) and (abs(float(_safe_float(cue.get("start", 0.0))) - t_start) <= TIME_EPS)
@@ -1189,16 +1070,10 @@ def write_corrected_alignment(
                 if new_cue["end"] < new_cue["start"]:
                     new_cue["end"] = new_cue["start"]
         else:
-            # Snap within transcript segment bounds while respecting minimal duration and gaps later.
-            # We don't change text here; align_subtitles_to_transcript already decided text correction rules.
-            # Ambiguity handling: we align to the selected transcript index only, not to multiple candidates.
-            # This prevents mismatched or blended spans.
             start = float(_safe_float(cue.get("start", 0.0)))
             end = float(_safe_float(cue.get("end", start)))
-            # If cue sits well outside the transcript span, clamp to the transcript
             if end <= start:
                 end = start + 0.4
-            # Clamp to transcript bounds to avoid drifting
             start = max(t_start, min(start, t_end))
             end = max(start, min(end, t_end))
             new_cue["start"] = start
@@ -1206,7 +1081,6 @@ def write_corrected_alignment(
 
         sequential_cues.append(new_cue)
 
-    # 5) Light text correction after sequential mapping (grammar/punctuation/wrapping)
     lang = (language or "").strip().lower() or "auto"
     corrected_cues: List[Dict] = []
     for cue in sequential_cues:
@@ -1227,12 +1101,9 @@ def write_corrected_alignment(
             c2["end"] = c2["start"]
         corrected_cues.append(c2)
 
-    # 6) Enforce monotonic order and minimal gaps, then sort by start for safety
     corrected_cues = _enforce_monotonic_nonoverlap(corrected_cues, min_gap=0.02, min_dur=0.4)
     corrected_cues = _sort_by_start(corrected_cues)
 
-    # 7) Reindex and ensure float contract; propagate format from originals when present
-    # For format propagation, map by nearest in time original cue to avoid mismatch.
     def _nearest_original_format(start: float) -> str:
         if not original_sorted:
             return ""
@@ -1266,14 +1137,9 @@ def align_subtitles(
 
     PUBLIC_INTERFACE
     Goals improved:
-    - More accurate timestamp corrections by aligning to the closest transcript segment and adjusting within span using
-      reading-speed-aware constraints and non-overlap enforcement.
-    - Subtitle text is modified only under high confidence:
-        * Exact literal match with transcript (case-sensitive) or strong normalized similarity (>= 0.9), or
-        * Very strong overlap in time with high text similarity (>= 0.9).
-      Otherwise, preserve the original subtitle text.
-    - When transcript-reference is mismatched/unclear (low similarity or no strong overlap), keep original text and
-      only normalize timing minimally.
+    - Align each transcript segment to the best available subtitle using primarily time overlap and secondarily text similarity.
+    - Avoid aggressive text replacements; only replace when literal match or very strong similarity is achieved.
+    - Ensure monotonic, non-overlapping timing with minimum durations.
 
     Inputs:
         transcript: Whisper-like segments list or dict with "segments".
@@ -1282,7 +1148,6 @@ def align_subtitles(
     Returns:
         A list of dicts aligned to transcript order with float-second timestamps and conservative text edits.
     """
-    # Normalize transcript
     if isinstance(transcript, dict):
         t_raw = transcript.get("segments") or []
         if not isinstance(t_raw, list):
@@ -1300,7 +1165,7 @@ def align_subtitles(
             except Exception:
                 return 0.0
         if isinstance(v, str):
-            m = re.match(r"(\\d{2}):(\\d{2}):(\\d{2})[,.](\\d{3})", v.strip())
+            m = re.match(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})", v.strip())
             if m:
                 h, mi, s, ms = m.groups()
                 return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000.0
@@ -1325,7 +1190,6 @@ def align_subtitles(
         transcript_segs.append({"text": str(seg.get("text", "") or ""), "start": float(st), "end": float(en)})
     transcript_segs = _sort_by_start(transcript_segs)
 
-    # Normalize subtitles; propagate first seen format
     sub_cues: List[Dict[str, Any]] = []
     common_format = ""
     for idx, c in enumerate(subtitles or [], start=1):
@@ -1351,7 +1215,6 @@ def align_subtitles(
         )
     sub_cues = _sort_by_start(sub_cues)
 
-    # Early return if no transcript
     if not transcript_segs:
         out: List[Dict] = []
         for i, c in enumerate(sub_cues, start=1):
@@ -1366,21 +1229,18 @@ def align_subtitles(
             )
         return out
 
-    # Helper thresholds
-    TIME_EPS = 1.0            # consider times matching if within 1s
-    STRONG_SIM = 0.90         # normalized text similarity threshold to allow text replacement
-    MIN_DUR = 0.4             # minimal reasonable cue duration
-    MAX_DUR = 6.0             # cap excessively long cues
-    CPS = 15.0                # default reading speed chars per second
-    MIN_GAP = 0.02            # minimal gap between cues
+    TIME_EPS = 1.0
+    STRONG_SIM = 0.90
+    MIN_DUR = 0.4
+    MAX_DUR = 6.0
+    CPS = 15.0
+    MIN_GAP = 0.02
 
     def _norm(s: str) -> str:
         return _normalize_text(s or "")
 
     def _text_sim(a: str, b: str) -> float:
-        # Combined simple similarity using RF if available; fallback jaccard
         pr, tr = _rf_scores(a, b)
-        # Weight token-set more as it’s robust to word order
         return 0.4 * pr + 0.6 * tr
 
     def _time_overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -1388,7 +1248,6 @@ def align_subtitles(
         hi = min(a_end, b_end)
         return max(0.0, hi - lo)
 
-    # Build aligned output: map each transcript segment to a cue
     used_subs = set()
     aligned_output: List[Dict] = []
 
@@ -1397,7 +1256,6 @@ def align_subtitles(
         seg_s = float(_safe_float(seg.get("start", 0.0)))
         seg_e = float(_safe_float(seg.get("end", seg_s)))
 
-        # Select best subtitle by a combined score: primary by time overlap, secondary by text similarity
         best_idx = -1
         best_score = -1.0
         for j, sc in enumerate(sub_cues):
@@ -1406,9 +1264,7 @@ def align_subtitles(
             s_s = float(_safe_float(sc.get("start", 0.0)))
             s_e = float(_safe_float(sc.get("end", s_s)))
             ov = _time_overlap(seg_s, seg_e, s_s, s_e)
-            # text similarity over normalized forms
             sim = _text_sim(_norm(sc.get("text", "")), _norm(seg_text))
-            # combined: prioritize overlap heavily, but let high sim break ties
             combined = ov + 0.2 * sim
             if combined > best_score:
                 best_score = combined
@@ -1422,48 +1278,36 @@ def align_subtitles(
             s_s = float(_safe_float(chosen_sub.get("start", 0.0)))
             s_e = float(_safe_float(chosen_sub.get("end", s_s)))
 
-            # Determine if times already okay and how strong the text match is
             times_match = (abs(s_s - seg_s) <= TIME_EPS) and (abs(s_e - seg_e) <= TIME_EPS)
             norm_sim = _text_sim(_norm(s_text), _norm(seg_text))
             literal_equal = s_text.strip() == seg_text.strip()
 
-            # Timestamp correction: prefer transcript time bounds but adjust within span using reading speed
-            # Compute a duration budget based on the text we will show (if we keep original text unless strong sim)
             will_replace_text = literal_equal or norm_sim >= STRONG_SIM
             display_text = seg_text if will_replace_text else s_text
             est_duration = _calc_reading_duration(display_text, CPS, MIN_DUR, MAX_DUR)
 
-            # Anchor start close to transcript start, but ensure continuity and not exceeding transcript end
             base_start = max(seg_s, (aligned_output[-1]["end"] + MIN_GAP) if aligned_output else seg_s)
             base_end = min(seg_e, base_start + est_duration)
             if base_end - base_start < MIN_DUR:
                 base_end = min(seg_e, base_start + MIN_DUR)
                 if base_end - base_start < MIN_DUR and seg_e - seg_s >= MIN_DUR:
-                    # shift back within transcript span if needed
                     base_start = max(seg_s, base_end - MIN_DUR)
 
             out_start, out_end = float(base_start), float(base_end)
 
-            # Text decision:
-            # - Only replace subtitle text with transcript text under high confidence (literal or strong sim).
-            # - If confidence is low, keep original subtitle text to preserve correctness.
             if will_replace_text:
-                out_text = seg_text  # high confidence alignment -> trust transcript text
+                out_text = seg_text
             else:
-                out_text = s_text   # low confidence -> preserve original
+                out_text = s_text
 
-            # If the times already match closely and similarity is low, be even more conservative: keep both text and times
             if times_match and norm_sim < STRONG_SIM:
                 out_start, out_end = float(s_s), float(s_e)
                 out_text = s_text
 
         else:
-            # No suitable subtitle found; create from transcript but do not alter any unknown/correct originals.
-            # Since there is no matching sub, we output transcript text and times directly.
             out_text = seg_text
             out_start = float(seg_s)
             out_end = float(seg_e)
-            # Ensure minimal duration
             if out_end - out_start < MIN_DUR:
                 out_end = min(seg_e, out_start + MIN_DUR)
 
@@ -1477,10 +1321,8 @@ def align_subtitles(
             }
         )
 
-    # Enforce monotonic non-overlap with minimal gaps
     aligned_output = _enforce_monotonic_nonoverlap(aligned_output, min_gap=MIN_GAP, min_dur=MIN_DUR)
 
-    # Reindex and ensure float types
     for k, c in enumerate(aligned_output, start=1):
         c["index"] = k
         c["start"] = float(_safe_float(c.get("start", 0.0)))
@@ -1492,8 +1334,6 @@ def align_subtitles(
 
 
 if __name__ == "__main__":
-    # Simple manual demo for quick testing when running this file directly.
-    # This demo uses only local heuristics with no external API calls.
     demo_transcript = [
         {"text": "Hello world", "start": 0.0, "end": 1.0},
         {"text": "This is a demo", "start": 1.05, "end": 2.5},
