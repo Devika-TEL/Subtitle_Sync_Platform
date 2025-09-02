@@ -17,7 +17,8 @@ rapidfuzz>=3.7.0
 spacy>=3.7.4
 language-tool-python>=2.7.1
 sentence-transformers>=3.0.1
-python-srt>=3.5.2
+# The correct PyPI package is 'srt' (not 'python-srt'); the code imports 'srt'
+srt>=3.5.2
 langid>=1.1.6
 
 # Optional: Official Gemini SDK (install in your environment to enable LLM-based correction/alignment)
