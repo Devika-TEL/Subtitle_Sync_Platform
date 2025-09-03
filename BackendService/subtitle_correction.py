@@ -18,6 +18,7 @@ from typing import Optional, List, Dict, Any, Tuple
 import uuid
 import math
 import unicodedata
+import difflib
 
 
 # --------------------------
@@ -201,6 +202,38 @@ def _normalize_subtitle_cues(subtitles: List[Dict[str, Any]]) -> List[Dict[str, 
 # Alignment logic
 # --------------------------
 
+# --------------------------
+# Similarity and correction settings
+# --------------------------
+
+# Tunable thresholds for semantic preservation and fuzzy spelling detection
+SEMANTIC_SIMILARITY_THRESHOLD = 0.86  # if >= keep subtitle core as-is (semantic match/near-identical)
+FUZZY_SPELLING_THRESHOLD = 0.72       # if >= treat as likely typo and replace with transcript word
+LOW_OVERLAP_SKIP_THRESHOLD = 0.18     # if window overlap less than this, skip aggressive correction
+
+# Minimal synonym/lemma map (internal only; no external deps)
+# Use lowercase keys/values. Include common paraphrases or lemma forms.
+_SYNONYM_MAP = {
+    "yeah": "yes",
+    "ya": "yes",
+    "yep": "yes",
+    "nope": "no",
+    "okay": "ok",
+    "alright": "ok",
+    "alrighty": "ok",
+    "gonna": "going",
+    "wanna": "want",
+    "gotta": "got",
+    "kinda": "kind",
+    "sorta": "sort",
+    "cannot": "can't",  # note: keep canonicalization simple
+    "okey": "ok",
+    "thanks": "thank",
+    "thankyou": "thank",
+    "tho": "though",
+    "through": "thru",  # sometimes appears in transcript variants
+}
+
 def _tokenize(text: str) -> List[str]:
     """
     Simple language-agnostic tokenization: split on whitespace.
@@ -209,6 +242,67 @@ def _tokenize(text: str) -> List[str]:
         return []
     return [tok for tok in text.split() if tok]
 
+
+def _normalize_core_for_compare(core: str) -> str:
+    """
+    Normalize a token core for comparison:
+    - Unicode NFKC
+    - Lowercase
+    """
+    return _normalize_text(core).lower()
+
+def _sequence_similarity(a: str, b: str) -> float:
+    """
+    Normalized string similarity using difflib.SequenceMatcher ratio.
+    """
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+def _best_fuzzy_match(word: str, candidates: List[str]) -> Tuple[str, float]:
+    """
+    Find the best fuzzy match for 'word' among candidates, returning (best, score).
+    Comparison is done on normalized (lowercased) forms but returns the original candidate.
+    """
+    best = ""
+    best_score = 0.0
+    w_norm = _normalize_core_for_compare(word)
+    for cand in candidates:
+        c_norm = _normalize_core_for_compare(cand)
+        score = _sequence_similarity(w_norm, c_norm)
+        if score > best_score:
+            best_score = score
+            best = cand
+    return best, best_score
+
+def _synonym_or_same(a: str, b: str) -> bool:
+    """
+    Returns True if a and b are the same under normalization or mapped via synonym map.
+    """
+    na = _normalize_core_for_compare(a)
+    nb = _normalize_core_for_compare(b)
+    if na == nb:
+        return True
+    # Check both directions in the map
+    mapped_a = _SYNONYM_MAP.get(na, na)
+    mapped_b = _SYNONYM_MAP.get(nb, nb)
+    return mapped_a == mapped_b
+
+def _token_overlap_ratio(a_tokens: List[str], b_tokens: List[str]) -> float:
+    """
+    Token overlap (Jaccard-like but on normalized token cores only).
+    """
+    if not a_tokens or not b_tokens:
+        return 0.0
+    a_norm = { _normalize_core_for_compare(x) for x in a_tokens if x }
+    b_norm = { _normalize_core_for_compare(x) for x in b_tokens if x }
+    if not a_norm or not b_norm:
+        return 0.0
+    inter = len(a_norm & b_norm)
+    union = len(a_norm | b_norm)
+    return inter / max(1, union)
 
 def _split_token_core_punct(token: str) -> Tuple[str, str, str]:
     """
@@ -332,11 +426,15 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     """
     Build a corrected cue covering the given segment span.
 
-    If base_cue_text is provided, perform word-level correction:
+    If base_cue_text is provided, perform word-level correction with semantic and fuzzy logic:
     - Extract transcript tokens from the span.
-    - Split subtitle tokens preserving leading/trailing punctuation.
-    - Replace core words with closest transcript core words by sequential alignment.
-      This keeps punctuation and general structure while improving lexical accuracy.
+    - Compute token overlap to guard against low-overlap windows.
+    - For each subtitle token:
+        * If core matches or is a synonym of any window token (or similarity >= SEMANTIC_SIMILARITY_THRESHOLD),
+          keep as-is to preserve paraphrases/synonyms.
+        * Else if best fuzzy match similarity >= FUZZY_SPELLING_THRESHOLD, replace with the best transcript word.
+        * Else, map sequentially to next transcript core (previous fallback) to softly guide wording.
+    - Preserve punctuation, casing, and token structure.
     """
     i, j = span
     if i < 0 or j <= i or i >= len(segments):
@@ -345,9 +443,14 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     start_ms = segs[0]["start_ms"]
     end_ms = segs[-1]["end_ms"]
 
-    # Gather transcript tokens
+    # Gather transcript tokens and core list
     transcript_text = " ".join(x["text"] for x in segs if x.get("text"))
     transcript_tokens = _tokenize(transcript_text)
+    transcript_cores = []
+    for t in transcript_tokens:
+        _, tcore, _ = _split_token_core_punct(t)
+        if tcore:
+            transcript_cores.append(tcore)
 
     if not base_cue_text:
         # Fallback to concatenated transcript if no base for word-level mapping
@@ -355,28 +458,75 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
 
     # Prepare subtitle tokens (preserve whitespace boundaries)
     sub_tokens_raw = base_cue_text.split() if base_cue_text else []
+    sub_cores_for_overlap = []
+    for st in sub_tokens_raw:
+        _, sc, _ = _split_token_core_punct(st)
+        if sc:
+            sub_cores_for_overlap.append(sc)
+
+    # Conservative fallback: if overlap between subtitle line and transcript window is low, avoid aggressive changes
+    overlap = _token_overlap_ratio(sub_cores_for_overlap, transcript_cores)
+    conservative_mode = overlap < LOW_OVERLAP_SKIP_THRESHOLD
+
     corrected_tokens: List[str] = []
     t_idx = 0
 
     for sub_tok in sub_tokens_raw:
         lead, core, trail = _split_token_core_punct(sub_tok)
         if core == "":
-            # No alnum core; keep token as-is
             corrected_tokens.append(sub_tok)
             continue
 
-        # Find next transcript core to map
-        mapped = core
-        while t_idx < len(transcript_tokens):
-            t_tok = transcript_tokens[t_idx]
-            t_idx += 1
-            t_lead, t_core, t_trail = _split_token_core_punct(t_tok)
-            if t_core:
-                # Map case like subtitle core
-                mapped = _apply_case_like(t_core, core)
+        # If conservative, only do sequential mapping lightly without forcing replacements
+        if conservative_mode:
+            mapped = core
+            # Try to sequentially map casing to the next transcript core (no lexical replacement)
+            while t_idx < len(transcript_cores):
+                t_core = transcript_cores[t_idx]
+                t_idx += 1
+                if t_core:
+                    mapped = _apply_case_like(t_core, core) if False else core  # keep original lexeme
+                    break
+            corrected_tokens.append(f"{lead}{mapped}{trail}")
+            continue
+
+        # Non-conservative: attempt semantic preserve or fuzzy spelling correction
+        keep_as_is = False
+        best_semantic = 0.0
+
+        # Check direct synonym/equality with any transcript core (fast path)
+        for t_core in transcript_cores:
+            if _synonym_or_same(core, t_core):
+                keep_as_is = True
                 break
-        # Rebuild token with preserved punctuation
-        corrected_tokens.append(f"{lead}{mapped}{trail}")
+
+        # If not synonym, compute best semantic similarity
+        if not keep_as_is and transcript_cores:
+            best_cand, best_semantic = _best_fuzzy_match(core, transcript_cores)
+            if best_semantic >= SEMANTIC_SIMILARITY_THRESHOLD:
+                keep_as_is = True
+
+        if keep_as_is:
+            # Preserve as-is, only maintain original casing/punct
+            corrected_tokens.append(f"{lead}{core}{trail}")
+            continue
+
+        # Not semantic; consider as spelling error if fuzzy is strong enough
+        mapped_core = core
+        if transcript_cores:
+            cand, score = _best_fuzzy_match(core, transcript_cores)
+            if score >= FUZZY_SPELLING_THRESHOLD:
+                # Replace with best candidate but apply original casing style
+                mapped_core = _apply_case_like(cand, core)
+            else:
+                # Soft sequential guide (fallback)
+                if t_idx < len(transcript_cores):
+                    t_core = transcript_cores[t_idx]
+                    t_idx += 1
+                    if t_core:
+                        mapped_core = _apply_case_like(t_core, core) if False else core  # keep lexeme but maintain index
+
+        corrected_tokens.append(f"{lead}{mapped_core}{trail}")
 
     corrected_text = " ".join(corrected_tokens).strip()
     if not corrected_text:
