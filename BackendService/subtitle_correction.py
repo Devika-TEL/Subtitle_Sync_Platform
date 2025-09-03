@@ -210,6 +210,29 @@ def _tokenize(text: str) -> List[str]:
     return [tok for tok in text.split() if tok]
 
 
+def _split_token_core_punct(token: str) -> Tuple[str, str, str]:
+    """
+    Split a token into (leading_punct, core, trailing_punct) where core is alnum/letter chunk.
+    Example:
+      '"Hello,' -> ('"', 'Hello', ',')
+      'world!'  -> ('', 'world', '!')
+      '...'     -> ('...', '', '')
+    """
+    if not token:
+        return "", "", ""
+    # Identify leading punctuation
+    i = 0
+    while i < len(token) and not token[i].isalnum():
+        i += 1
+    j = len(token) - 1
+    while j >= i and not token[j].isalnum():
+        j -= 1
+    leading = token[:i]
+    core = token[i:j+1] if j >= i else ""
+    trailing = token[j+1:] if j+1 < len(token) else ""
+    return leading, core, trailing
+
+
 def _overlap_ms(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
@@ -224,6 +247,25 @@ def _jaccard_similarity(tokens_a: List[str], tokens_b: List[str]) -> float:
     if union == 0:
         return 0.0
     return inter / union
+
+
+def _apply_case_like(source: str, target_style: str) -> str:
+    """
+    Apply case style of target_style to source.
+    - If target_style is all upper -> upper
+    - If all lower -> lower
+    - If title case -> title
+    - Else keep source as is.
+    """
+    if not source:
+        return source
+    if target_style.isupper():
+        return source.upper()
+    if target_style.islower():
+        return source.lower()
+    if target_style.istitle():
+        return source.title()
+    return source
 
 
 def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[str, Any]], window_ms: int = 8000) -> Tuple[int, int]:
@@ -286,9 +328,15 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
     return best_span
 
 
-def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dict[str, Any]], base_cue_text: Optional[str] = None) -> Dict[str, Any]:
     """
     Build a corrected cue covering the given segment span.
+
+    If base_cue_text is provided, perform word-level correction:
+    - Extract transcript tokens from the span.
+    - Split subtitle tokens preserving leading/trailing punctuation.
+    - Replace core words with closest transcript core words by sequential alignment.
+      This keeps punctuation and general structure while improving lexical accuracy.
     """
     i, j = span
     if i < 0 or j <= i or i >= len(segments):
@@ -296,8 +344,45 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     segs = segments[i:j]
     start_ms = segs[0]["start_ms"]
     end_ms = segs[-1]["end_ms"]
-    text = " ".join(x["text"] for x in segs if x.get("text"))
-    return {"start_ms": start_ms, "end_ms": end_ms, "text": text}
+
+    # Gather transcript tokens
+    transcript_text = " ".join(x["text"] for x in segs if x.get("text"))
+    transcript_tokens = _tokenize(transcript_text)
+
+    if not base_cue_text:
+        # Fallback to concatenated transcript if no base for word-level mapping
+        return {"start_ms": start_ms, "end_ms": end_ms, "text": transcript_text}
+
+    # Prepare subtitle tokens (preserve whitespace boundaries)
+    sub_tokens_raw = base_cue_text.split() if base_cue_text else []
+    corrected_tokens: List[str] = []
+    t_idx = 0
+
+    for sub_tok in sub_tokens_raw:
+        lead, core, trail = _split_token_core_punct(sub_tok)
+        if core == "":
+            # No alnum core; keep token as-is
+            corrected_tokens.append(sub_tok)
+            continue
+
+        # Find next transcript core to map
+        mapped = core
+        while t_idx < len(transcript_tokens):
+            t_tok = transcript_tokens[t_idx]
+            t_idx += 1
+            t_lead, t_core, t_trail = _split_token_core_punct(t_tok)
+            if t_core:
+                # Map case like subtitle core
+                mapped = _apply_case_like(t_core, core)
+                break
+        # Rebuild token with preserved punctuation
+        corrected_tokens.append(f"{lead}{mapped}{trail}")
+
+    corrected_text = " ".join(corrected_tokens).strip()
+    if not corrected_text:
+        corrected_text = transcript_text
+
+    return {"start_ms": start_ms, "end_ms": end_ms, "text": corrected_text}
 
 
 def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tuple[int, int]]) -> List[Dict[str, Any]]:
@@ -332,7 +417,7 @@ def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tupl
 
 def _enforce_ott_constraints(cues: List[Dict[str, Any]],
                              min_duration_ms: int = 800,
-                             max_duration_ms: int = 8000]) -> List[Dict[str, Any]]:
+                             max_duration_ms: int = 8000) -> List[Dict[str, Any]]:
     """
     Enforce basic OTT constraints:
     - Each cue duration within [min_duration_ms, max_duration_ms]
@@ -454,7 +539,7 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
             continue
         used_spans.append(span)
-        corrected = _build_corrected_cue_from_segments(span, segments)
+        corrected = _build_corrected_cue_from_segments(span, segments, base_cue_text=cue.get("text", ""))
         if not corrected:
             # Fallback to original if construction failed
             aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
@@ -473,7 +558,15 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
 
 # PUBLIC_INTERFACE
 def apply_additional_compliance_fixes(path: str, processed_dir: str) -> str:
-    """Apply post-processing corrections; for now, return a copy to a new file."""
+    """Apply post-processing corrections; for now, return a copy to a new file.
+
+    Args:
+        path: Path to the corrected subtitle file to post-process.
+        processed_dir: Directory to write the resulting file into.
+
+    Returns:
+        Absolute path to the newly written file in processed_dir.
+    """
     src = Path(path)
     content = src.read_text(encoding="utf-8", errors="ignore")
     # Placeholder: could adjust reading speeds, spacing, punctuation etc.
