@@ -846,3 +846,46 @@ def apply_additional_compliance_fixes(path: str, processed_dir: str) -> str:
     out = Path(processed_dir) / f"temp_{uuid.uuid4()}_postfix.srt"
     out.write_text(content, encoding="utf-8")
     return str(out)
+
+
+# PUBLIC_INTERFACE
+def log_matching_cues_summary_from_srt(subtitle_content: str, video_name: Optional[str] = None) -> None:
+    """Print a centralized, simplified summary of matching cues and potential issues based on SRT content.
+
+    This function is the single place responsible for high-level console output related to
+    subtitle-audio matching summaries. It does not perform alignment; for detailed per-cue alignment
+    and logging, see correct_subtitles().
+
+    Args:
+        subtitle_content: The SRT text content to scan.
+        video_name: Optional video name for display in logs.
+    """
+    try:
+        import re as _re
+        blocks = _re.split(r"\n\s*\n", (subtitle_content or "").strip())
+        cue_count = 0
+        issues = 0
+        sample_findings: List[str] = []
+        for b in blocks:
+            parts = b.splitlines()
+            if len(parts) >= 2 and "-->" in "\n".join(parts[:2]):
+                cue_count += 1
+                text_lines = [x for x in parts[2:] if x.strip() != ""]
+                for tl in text_lines:
+                    if len(tl) > 42:
+                        issues += 1
+                        if len(sample_findings) < 5:
+                            sample_findings.append(f"Long line ({len(tl)} chars): {tl[:60]}...")
+        print("[QualityCheck] Subtitle-Audio Matching Cues Summary")
+        if video_name:
+            print(f"[QualityCheck] Video: {video_name}")
+        print(f"[QualityCheck] Detected cues: {cue_count}")
+        if issues == 0:
+            print("[QualityCheck] No immediate reading-speed issues detected in sample scan.")
+        else:
+            print(f"[QualityCheck] Potential issues detected: {issues} (reading speed/line length)")
+            for s in sample_findings:
+                print(f"[QualityCheck] • {s}")
+        print("[QualityCheck] Note: This is a simplified console summary. Detailed per-cue alignment is handled in correction modules.")
+    except Exception as e:
+        print(f"[QualityCheck] Failed to compute matching cues summary: {e}")

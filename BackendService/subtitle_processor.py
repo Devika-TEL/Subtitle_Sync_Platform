@@ -39,38 +39,7 @@ def run_quality_check_and_correct(
     # Very naive overlap fix stub: ensure blank line separation
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
 
-    # If a video is provided, output a simulated "matching cues" summary to the console.
-    # This keeps behavior deterministic while surfacing useful console output during processing.
-    if video_path:
-        try:
-            blocks = re.split(r"\n\s*\n", normalized.strip())
-            cue_count = 0
-            issues = 0
-            sample_findings: List[str] = []
-            for b in blocks:
-                parts = b.splitlines()
-                if len(parts) >= 3 and "-->" in "\n".join(parts[:2]):
-                    cue_count += 1
-                    # basic synthetic checks to produce console output:
-                    # - flag very long text lines as potential reading-speed issues
-                    text_lines = [x for x in parts[2:] if x.strip() != ""]
-                    for tl in text_lines:
-                        if len(tl) > 42:
-                            issues += 1
-                            if len(sample_findings) < 5:
-                                sample_findings.append(f"Long line ({len(tl)} chars): {tl[:60]}...")
-            print("[QualityCheck] Subtitle-Audio Matching Cues Summary")
-            print(f"[QualityCheck] Video: {Path(video_path).name}")
-            print(f"[QualityCheck] Detected cues: {cue_count}")
-            if issues == 0:
-                print("[QualityCheck] No immediate reading-speed issues detected in sample scan.")
-            else:
-                print(f"[QualityCheck] Potential issues detected: {issues} (reading speed/line length)")
-                for s in sample_findings:
-                    print(f"[QualityCheck] • {s}")
-            print("[QualityCheck] Note: This is a simplified console summary. Detailed per-cue alignment is handled in correction modules.")
-        except Exception as e:
-            print(f"[QualityCheck] Failed to compute matching cues summary: {e}")
+
 
     if enforce_ott:
         # Enforce max two lines per caption (super naive: truncate extra lines in blocks)
