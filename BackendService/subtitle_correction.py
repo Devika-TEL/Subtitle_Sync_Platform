@@ -435,6 +435,15 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
         * Else if best fuzzy match similarity >= FUZZY_SPELLING_THRESHOLD, replace with the best transcript word.
         * Else, map sequentially to next transcript core (previous fallback) to softly guide wording.
     - Preserve punctuation, casing, and token structure.
+
+    Returns:
+        Dict with keys: start_ms, end_ms, text, and metadata:
+            _meta: {
+                'overlap': float,
+                'conservative_mode': bool,
+                'replacements': [ {'from': str, 'to': str, 'reason': str, 'score': float} ... ],
+                'kept_tokens': [str],
+            }
     """
     i, j = span
     if i < 0 or j <= i or i >= len(segments):
@@ -453,10 +462,8 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
             transcript_cores.append(tcore)
 
     if not base_cue_text:
-        # Fallback to concatenated transcript if no base for word-level mapping
-        return {"start_ms": start_ms, "end_ms": end_ms, "text": transcript_text}
+        return {"start_ms": start_ms, "end_ms": end_ms, "text": transcript_text, "_meta": {"overlap": 1.0, "conservative_mode": False, "replacements": [], "kept_tokens": []}}
 
-    # Prepare subtitle tokens (preserve whitespace boundaries)
     sub_tokens_raw = base_cue_text.split() if base_cue_text else []
     sub_cores_for_overlap = []
     for st in sub_tokens_raw:
@@ -464,30 +471,35 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
         if sc:
             sub_cores_for_overlap.append(sc)
 
-    # Conservative fallback: if overlap between subtitle line and transcript window is low, avoid aggressive changes
     overlap = _token_overlap_ratio(sub_cores_for_overlap, transcript_cores)
     conservative_mode = overlap < LOW_OVERLAP_SKIP_THRESHOLD
 
     corrected_tokens: List[str] = []
     t_idx = 0
+    replacements: List[Dict[str, Any]] = []
+    kept_tokens: List[str] = []
 
     for sub_tok in sub_tokens_raw:
         lead, core, trail = _split_token_core_punct(sub_tok)
         if core == "":
             corrected_tokens.append(sub_tok)
+            kept_tokens.append(sub_tok)
             continue
 
-        # If conservative, only do sequential mapping lightly without forcing replacements
         if conservative_mode:
-            mapped = core
-            # Try to sequentially map casing to the next transcript core (no lexical replacement)
-            while t_idx < len(transcript_cores):
-                t_core = transcript_cores[t_idx]
+            # Allow only very strong fuzzy correction even in conservative mode
+            mapped_core = core
+            if transcript_cores:
+                cand, score = _best_fuzzy_match(core, transcript_cores)
+                if score >= max(FUZZY_SPELLING_THRESHOLD, 0.90):  # very high confidence
+                    mapped_core = _apply_case_like(cand, core)
+                    replacements.append({"from": core, "to": mapped_core, "reason": "fuzzy-high-conservative", "score": score})
+                else:
+                    kept_tokens.append(core)
+            # Advance index lightly to keep relative progression
+            if t_idx < len(transcript_cores):
                 t_idx += 1
-                if t_core:
-                    mapped = _apply_case_like(t_core, core) if False else core  # keep original lexeme
-                    break
-            corrected_tokens.append(f"{lead}{mapped}{trail}")
+            corrected_tokens.append(f"{lead}{mapped_core}{trail}")
             continue
 
         # Non-conservative: attempt semantic preserve or fuzzy spelling correction
@@ -501,30 +513,31 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
                 break
 
         # If not synonym, compute best semantic similarity
+        best_cand = core
+        best_score = 0.0
         if not keep_as_is and transcript_cores:
             best_cand, best_semantic = _best_fuzzy_match(core, transcript_cores)
+            best_score = best_semantic
             if best_semantic >= SEMANTIC_SIMILARITY_THRESHOLD:
                 keep_as_is = True
 
         if keep_as_is:
-            # Preserve as-is, only maintain original casing/punct
             corrected_tokens.append(f"{lead}{core}{trail}")
+            kept_tokens.append(core)
             continue
 
         # Not semantic; consider as spelling error if fuzzy is strong enough
         mapped_core = core
         if transcript_cores:
-            cand, score = _best_fuzzy_match(core, transcript_cores)
+            cand, score = (best_cand, best_score) if best_cand != core else _best_fuzzy_match(core, transcript_cores)
             if score >= FUZZY_SPELLING_THRESHOLD:
-                # Replace with best candidate but apply original casing style
                 mapped_core = _apply_case_like(cand, core)
+                replacements.append({"from": core, "to": mapped_core, "reason": "fuzzy", "score": score})
             else:
-                # Soft sequential guide (fallback)
+                # Soft sequential guide (fallback) - keep original core but advance index
                 if t_idx < len(transcript_cores):
-                    t_core = transcript_cores[t_idx]
                     t_idx += 1
-                    if t_core:
-                        mapped_core = _apply_case_like(t_core, core) if False else core  # keep lexeme but maintain index
+                kept_tokens.append(core)
 
         corrected_tokens.append(f"{lead}{mapped_core}{trail}")
 
@@ -532,7 +545,17 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     if not corrected_text:
         corrected_text = transcript_text
 
-    return {"start_ms": start_ms, "end_ms": end_ms, "text": corrected_text}
+    return {
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "text": corrected_text,
+        "_meta": {
+            "overlap": overlap,
+            "conservative_mode": conservative_mode,
+            "replacements": replacements,
+            "kept_tokens": kept_tokens,
+        },
+    }
 
 
 def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tuple[int, int]]) -> List[Dict[str, Any]]:
@@ -582,19 +605,33 @@ def _enforce_ott_constraints(cues: List[Dict[str, Any]],
     prev_end = 0
 
     for i, cue in enumerate(cues_sorted):
-        start = max(prev_end, int(cue["start_ms"]))
-        end = max(start + 1, int(cue["end_ms"]))
+        orig_start = int(cue["start_ms"])
+        orig_end = int(cue["end_ms"])
+        start = max(prev_end, orig_start)
+        end = max(start + 1, orig_end)
         dur = end - start
+        change_reasons = []
+
+        # Resolve overlap with previous
+        if start != orig_start:
+            change_reasons.append(f"shift-start-to-avoid-overlap prev_end={prev_end}")
 
         # Clamp duration
         if dur < min_duration_ms:
             end = start + min_duration_ms
             dur = min_duration_ms
+            change_reasons.append(f"min-duration {min_duration_ms}ms")
         elif dur > max_duration_ms:
             end = start + max_duration_ms
             dur = max_duration_ms
+            change_reasons.append(f"max-duration {max_duration_ms}ms")
 
-        # Assign and advance
+        if change_reasons or orig_start != start or orig_end != end:
+            print(f"[OTT] Cue#{i+1} time adjusted: "
+                  f"{_ms_to_srt_time(orig_start)} --> {_ms_to_srt_time(orig_end)}  "
+                  f"to  {_ms_to_srt_time(start)} --> {_ms_to_srt_time(end)}  "
+                  f"reason={'|'.join(change_reasons) if change_reasons else 'normalize'}")
+
         fixed.append({"start_ms": start, "end_ms": end, "text": cue.get("text", "")})
         prev_end = end
 
@@ -663,45 +700,81 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
         List of corrected cues with structure: {'start_ms': int, 'end_ms': int, 'text': str}
         This function is pure and performs no file I/O.
     """
-    # Defensive copies are not necessary; we build fresh outputs.
     if not isinstance(transcript, dict) or not isinstance(subtitles, list):
         return subtitles or []
 
-    # Normalize inputs
     segments = _flatten_transcript_segments(transcript)
     cues_in = _normalize_subtitle_cues(subtitles)
 
     if not segments or not cues_in:
-        # Nothing to align; return normalized cues as-is
         return cues_in
 
-    # Language mismatch check
     if not _likely_same_language(transcript, cues_in):
-        return subtitles  # original unchanged per requirements
+        print("[CorrectSubtitles] Language mismatch detected; returning original subtitles unchanged.")
+        return subtitles
 
-    # Align cues to transcript segments
     used_spans: List[Tuple[int, int]] = []
     aligned_cues: List[Dict[str, Any]] = []
-    for cue in cues_in:
+
+    for idx, cue in enumerate(cues_in, start=1):
         span = _find_best_segment_window_for_cue(cue, segments)
         if span == (-1, -1):
-            # If no good span found, keep cue as-is but normalized
+            print(f"[Align] Cue#{idx}: No matching segment window found; keeping original timing and text.")
             aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
             continue
+
         used_spans.append(span)
         corrected = _build_corrected_cue_from_segments(span, segments, base_cue_text=cue.get("text", ""))
+
         if not corrected:
-            # Fallback to original if construction failed
+            print(f"[Align] Cue#{idx}: Failed to build corrected cue; keeping original.")
             aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
             continue
+
+        # Log timestamp change from original cue to aligned span prior to OTT
+        new_start = corrected["start_ms"]
+        new_end = corrected["end_ms"]
+        if new_start != cue["start_ms"] or new_end != cue["end_ms"]:
+            print(f"[Align] Cue#{idx} time changed: "
+                  f"{_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}  "
+                  f"to  {_ms_to_srt_time(new_start)} --> {_ms_to_srt_time(new_end)} (alignment)")
+
+        # Log text changes and token-level replacements
+        old_text = cue.get("text", "") or ""
+        new_text = corrected.get("text", "") or ""
+        if old_text != new_text:
+            print(f"[Text] Cue#{idx} text changed:\n  OLD: {old_text}\n  NEW: {new_text}")
+        meta = corrected.get("_meta", {})
+        if meta:
+            if meta.get("conservative_mode"):
+                print(f"[Text] Cue#{idx} conservative_mode=True (overlap={meta.get('overlap', 0.0):.2f}); limited changes applied.")
+            reps = meta.get("replacements", [])
+            for r in reps:
+                print(f"[TextReplace] Cue#{idx}: '{r['from']}' -> '{r['to']}' reason={r.get('reason')} score={r.get('score'):.2f}")
+
+        # Remove meta before proceeding
+        corrected.pop("_meta", None)
         aligned_cues.append(corrected)
 
-    # Generate missing cues for uncovered transcript segments
+    # Generate missing cues
     missing = _generate_missing_cues(segments, used_spans)
+    for m in missing:
+        print(f"[Generate] New cue created for uncovered transcript span: "
+              f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])} | {m.get('text','')[:80]}")
 
-    # Merge, sort, and enforce OTT constraints
     merged = _merge_and_sort_cues(aligned_cues, missing)
     constrained = _enforce_ott_constraints(merged)
+
+    # After OTT, report any further time changes by comparing merged vs constrained
+    merged_by_key = [(c["start_ms"], c["end_ms"], c.get("text", "")) for c in merged]
+    for i, cue in enumerate(constrained):
+        # find matching by text content in order; if lengths differ, just print constrained as final
+        if i < len(merged):
+            m = merged[i]
+            if m["start_ms"] != cue["start_ms"] or m["end_ms"] != cue["end_ms"]:
+                print(f"[OTT-Final] Cue#{i+1} final time: "
+                      f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])}  "
+                      f"to  {_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}")
 
     return constrained
 
