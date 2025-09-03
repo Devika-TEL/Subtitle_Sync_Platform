@@ -713,15 +713,34 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
         print("[CorrectSubtitles] Language mismatch detected; returning original subtitles unchanged.")
         return subtitles
 
+    # Counters for safeguard reporting
+    changed_time = 0
+    changed_text = 0
+    duration_clamped = 0
+
     used_spans: List[Tuple[int, int]] = []
     aligned_cues: List[Dict[str, Any]] = []
 
     for idx, cue in enumerate(cues_in, start=1):
         span = _find_best_segment_window_for_cue(cue, segments)
         if span == (-1, -1):
-            print(f"[Align] Cue#{idx}: No matching segment window found; keeping original timing and text.")
-            aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
-            continue
+            # No matching window by similarity; snap to nearest transcript segment by time
+            # This ensures start times correspond to real speech window.
+            nearest_idx = None
+            min_d = 1e18
+            cue_center = (cue["start_ms"] + cue["end_ms"]) // 2
+            for i, seg in enumerate(segments):
+                d = abs(((seg["start_ms"] + seg["end_ms"]) // 2) - cue_center)
+                if d < min_d:
+                    min_d = d
+                    nearest_idx = i
+            if nearest_idx is not None:
+                span = (nearest_idx, nearest_idx + 1)
+                print(f"[Align] Cue#{idx}: No text match; snapped to nearest transcript segment {nearest_idx}.")
+            else:
+                print(f"[Align] Cue#{idx}: No transcript available; keeping original timing and text.")
+                aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
+                continue
 
         used_spans.append(span)
         corrected = _build_corrected_cue_from_segments(span, segments, base_cue_text=cue.get("text", ""))
@@ -731,18 +750,34 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
             continue
 
-        # Log timestamp change from original cue to aligned span prior to OTT
-        new_start = corrected["start_ms"]
-        new_end = corrected["end_ms"]
+        # Always clamp cue to the transcript span window first (snap/clamp)
+        seg_start = segments[span[0]]["start_ms"]
+        seg_end = segments[span[1]-1]["end_ms"]
+        new_start = max(seg_start, corrected["start_ms"])
+        new_end = min(seg_end, corrected["end_ms"])
+        # Ensure within the transcript span; if inverted due to min/max, expand to span
+        if new_end <= new_start:
+            new_start = seg_start
+            new_end = seg_end
+
+        # Track and log timestamp changes from original cue to aligned window prior to OTT
         if new_start != cue["start_ms"] or new_end != cue["end_ms"]:
-            print(f"[Align] Cue#{idx} time changed: "
-                  f"{_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}  "
-                  f"to  {_ms_to_srt_time(new_start)} --> {_ms_to_srt_time(new_end)} (alignment)")
+            changed_time += 1
+            print(
+                f"[Align] Cue#{idx} time changed: "
+                f"{_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}  "
+                f"to  {_ms_to_srt_time(new_start)} --> {_ms_to_srt_time(new_end)} (snap-to-transcript)"
+            )
+
+        # Replace corrected timing
+        corrected["start_ms"] = new_start
+        corrected["end_ms"] = new_end
 
         # Log text changes and token-level replacements
         old_text = cue.get("text", "") or ""
         new_text = corrected.get("text", "") or ""
         if old_text != new_text:
+            changed_text += 1
             print(f"[Text] Cue#{idx} text changed:\n  OLD: {old_text}\n  NEW: {new_text}")
         meta = corrected.get("_meta", {})
         if meta:
@@ -756,25 +791,40 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
         corrected.pop("_meta", None)
         aligned_cues.append(corrected)
 
-    # Generate missing cues
+    # Generate missing cues for uncovered transcript segments
     missing = _generate_missing_cues(segments, used_spans)
     for m in missing:
         print(f"[Generate] New cue created for uncovered transcript span: "
               f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])} | {m.get('text','')[:80]}")
 
     merged = _merge_and_sort_cues(aligned_cues, missing)
+
+    # Before OTT, detect overlong durations and log that they will be clamped
+    for i, c in enumerate(merged, start=1):
+        dur = c["end_ms"] - c["start_ms"]
+        if dur > 8000:
+            duration_clamped += 1
+            print(f"[Duration] Cue#{i} overlong ({dur} ms); will be clamped to OTT max.")
+
     constrained = _enforce_ott_constraints(merged)
 
     # After OTT, report any further time changes by comparing merged vs constrained
-    merged_by_key = [(c["start_ms"], c["end_ms"], c.get("text", "")) for c in merged]
     for i, cue in enumerate(constrained):
-        # find matching by text content in order; if lengths differ, just print constrained as final
         if i < len(merged):
             m = merged[i]
             if m["start_ms"] != cue["start_ms"] or m["end_ms"] != cue["end_ms"]:
                 print(f"[OTT-Final] Cue#{i+1} final time: "
                       f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])}  "
                       f"to  {_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}")
+
+    # Safeguard summary
+    total_cues = len(cues_in)
+    if changed_time == 0 and changed_text == 0 and duration_clamped == 0:
+        print("[Summary] No cues were modified by alignment, text correction, or OTT duration clamping. "
+              "Verify similarity thresholds and input transcript accuracy.")
+    else:
+        print(f"[Summary] Cues processed: {total_cues} | time-adjusted: {changed_time} | "
+              f"text-changed: {changed_text} | duration-clamped: {duration_clamped}")
 
     return constrained
 
