@@ -12,6 +12,10 @@ Design principles:
 - OTT timing constraints enforcement: min/max cue duration, no overlaps, basic gap handling.
 - Pure functions only; the only file I/O is within apply_additional_compliance_fixes, by design.
 - ALL helper functions live in this file to ensure encapsulation and ease of maintenance.
+
+Timestamp policy:
+- All times within public interfaces and internal logic are handled in seconds (float).
+- No use of milliseconds or frames internally. SRT formatting helpers convert seconds to SRT as needed.
 """
 
 from pathlib import Path
@@ -48,19 +52,17 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
-def _ms_to_srt_time(ms: int) -> str:
+def _s_to_srt_time(seconds: float) -> str:
     """
-    Convert milliseconds to SRT timestamp: HH:MM:SS,mmm
+    Convert seconds (float) to SRT timestamp: HH:MM:SS,mmm
     """
-    ms = max(0, ms)
-    s, msec = divmod(ms, 1000)
+    if seconds is None or not isinstance(seconds, (int, float)) or math.isnan(float(seconds)) or seconds < 0:
+        seconds = 0.0
+    ms_total = int(round(float(seconds) * 1000.0))
+    s, msec = divmod(ms_total, 1000)
     h, s = divmod(s, 3600)
     m, s = divmod(s, 60)
     return f"{h:02d}:{m:02d}:{s:02d},{msec:03d}"
-
-
-def _s_to_ms(s: float) -> int:
-    return int(round(s * 1000.0))
 
 
 # --------------------------
@@ -148,60 +150,64 @@ def _likely_same_language(transcript: Dict[str, Any], subtitles: List[Dict[str, 
 
 def _flatten_transcript_segments(transcript: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Flatten a Whisper-like transcript into a list of segments with start_ms, end_ms, text.
-    Accepts timestamp in seconds (float) or ms in ints if provided.
+    Flatten a Whisper-like transcript into a list of segments with start_s, end_s, text.
+    Accepts timestamp in seconds (float).
     """
     out: List[Dict[str, Any]] = []
     if not isinstance(transcript, dict):
         return out
     for seg in transcript.get("segments", []):
-        start = seg.get("start")
-        end = seg.get("end")
-        # Whisper uses seconds; ensure ms
-        start_ms = _s_to_ms(_safe_float(start))
-        end_ms = _s_to_ms(_safe_float(end))
-        if end_ms < start_ms:
-            end_ms = start_ms + 1
+        start_s = _safe_float(seg.get("start"))
+        end_s = _safe_float(seg.get("end"))
+        if not math.isfinite(start_s):
+            start_s = 0.0
+        if not math.isfinite(end_s):
+            end_s = start_s
+        if end_s < start_s:
+            end_s = start_s + 1e-3
         text = _normalize_text(str(seg.get("text", "")))
-        if text == "" and (end_ms - start_ms) <= 0:
+        if text == "" and (end_s - start_s) <= 0.0:
             continue
-        out.append({"start_ms": start_ms, "end_ms": end_ms, "text": text})
+        out.append({"start_s": start_s, "end_s": end_s, "text": text})
     return out
 
 
 def _normalize_subtitle_cues(subtitles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Normalize input subtitle cues to a standard structure:
-    - start_ms, end_ms, text
-    Accept inputs that might use start/end in seconds or ms; try to detect.
+    - start_s, end_s, text
+    Accept inputs that might use start/end in seconds or legacy start_ms/end_ms; convert to seconds.
     """
     cues: List[Dict[str, Any]] = []
     for cue in subtitles or []:
         if not isinstance(cue, dict):
             # Skip invalid entries
             continue
-        # Accept keys: start, end (sec) or start_ms, end_ms (ms)
-        if "start_ms" in cue and "end_ms" in cue:
-            start_ms = int(cue["start_ms"])
-            end_ms = int(cue["end_ms"])
+        # Accept keys: start, end (sec) or legacy start_ms, end_ms (ms)
+        if "start_s" in cue and "end_s" in cue:
+            start_s = _safe_float(cue["start_s"])
+            end_s = _safe_float(cue["end_s"])
+        elif "start_ms" in cue and "end_ms" in cue:
+            start_s = _safe_float(cue["start_ms"]) / 1000.0
+            end_s = _safe_float(cue["end_ms"]) / 1000.0
         else:
-            start_ms = _s_to_ms(_safe_float(cue.get("start")))
-            end_ms = _s_to_ms(_safe_float(cue.get("end")))
-        if end_ms < start_ms:
-            end_ms = start_ms + 1
+            start_s = _safe_float(cue.get("start"))
+            end_s = _safe_float(cue.get("end"))
+        if not math.isfinite(start_s):
+            start_s = 0.0
+        if not math.isfinite(end_s):
+            end_s = start_s
+        if end_s < start_s:
+            end_s = start_s + 1e-3
         text = _normalize_text(str(cue.get("text", "")))
         # carry forward language if exists for language check
         lang = _normalize_lang_code(cue.get("language"))
-        norm = {"start_ms": start_ms, "end_ms": end_ms, "text": text}
+        norm = {"start_s": start_s, "end_s": end_s, "text": text}
         if lang:
             norm["language"] = lang
         cues.append(norm)
     return cues
 
-
-# --------------------------
-# Alignment logic
-# --------------------------
 
 # --------------------------
 # Similarity and correction settings
@@ -211,6 +217,7 @@ def _normalize_subtitle_cues(subtitles: List[Dict[str, Any]]) -> List[Dict[str, 
 SEMANTIC_SIMILARITY_THRESHOLD = 0.86  # if >= keep subtitle core as-is (semantic match/near-identical)
 FUZZY_SPELLING_THRESHOLD = 0.72       # if >= treat as likely typo and replace with transcript word
 LOW_OVERLAP_SKIP_THRESHOLD = 0.18     # if window overlap less than this, skip aggressive correction
+
 
 # Minimal synonym/lemma map (internal only; no external deps)
 # Use lowercase keys/values. Include common paraphrases or lemma forms.
@@ -227,12 +234,12 @@ _SYNONYM_MAP = {
     "gotta": "got",
     "kinda": "kind",
     "sorta": "sort",
-    "cannot": "can't",  # note: keep canonicalization simple
+    "cannot": "can't",
     "okey": "ok",
     "thanks": "thank",
     "thankyou": "thank",
     "tho": "though",
-    "through": "thru",  # sometimes appears in transcript variants
+    "through": "thru",
 }
 
 def _tokenize(text: str) -> List[str]:
@@ -252,6 +259,7 @@ def _normalize_core_for_compare(core: str) -> str:
     """
     return _normalize_text(core).lower()
 
+
 def _sequence_similarity(a: str, b: str) -> float:
     """
     Normalized string similarity using difflib.SequenceMatcher ratio.
@@ -261,6 +269,7 @@ def _sequence_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(None, a, b).ratio()
+
 
 def _best_fuzzy_match(word: str, candidates: List[str]) -> Tuple[str, float]:
     """
@@ -278,6 +287,7 @@ def _best_fuzzy_match(word: str, candidates: List[str]) -> Tuple[str, float]:
             best = cand
     return best, best_score
 
+
 def _synonym_or_same(a: str, b: str) -> bool:
     """
     Returns True if a and b are the same under normalization or mapped via synonym map.
@@ -291,19 +301,21 @@ def _synonym_or_same(a: str, b: str) -> bool:
     mapped_b = _SYNONYM_MAP.get(nb, nb)
     return mapped_a == mapped_b
 
+
 def _token_overlap_ratio(a_tokens: List[str], b_tokens: List[str]) -> float:
     """
     Token overlap (Jaccard-like but on normalized token cores only).
     """
     if not a_tokens or not b_tokens:
         return 0.0
-    a_norm = { _normalize_core_for_compare(x) for x in a_tokens if x }
-    b_norm = { _normalize_core_for_compare(x) for x in b_tokens if x }
+    a_norm = {_normalize_core_for_compare(x) for x in a_tokens if x}
+    b_norm = {_normalize_core_for_compare(x) for x in b_tokens if x}
     if not a_norm or not b_norm:
         return 0.0
     inter = len(a_norm & b_norm)
     union = len(a_norm | b_norm)
     return inter / max(1, union)
+
 
 def _split_token_core_punct(token: str) -> Tuple[str, str, str]:
     """
@@ -323,13 +335,13 @@ def _split_token_core_punct(token: str) -> Tuple[str, str, str]:
     while j >= i and not token[j].isalnum():
         j -= 1
     leading = token[:i]
-    core = token[i:j+1] if j >= i else ""
-    trailing = token[j+1:] if j+1 < len(token) else ""
+    core = token[i:j + 1] if j >= i else ""
+    trailing = token[j + 1:] if j + 1 < len(token) else ""
     return leading, core, trailing
 
 
-def _overlap_ms(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
-    return max(0, min(a_end, b_end) - max(a_start, b_start))
+def _overlap_s(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
 
 def _jaccard_similarity(tokens_a: List[str], tokens_b: List[str]) -> float:
@@ -363,21 +375,21 @@ def _apply_case_like(source: str, target_style: str) -> str:
     return source
 
 
-def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[str, Any]], window_ms: int = 8000) -> Tuple[int, int]:
+def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[str, Any]], window_s: float = 8.0) -> Tuple[int, int]:
     """
     Find segment index range [i, j) whose concatenated text best matches the cue tokens
-    within a temporal window around the cue time.
+    within a temporal window around the cue time (seconds).
     Returns (start_index, end_index_exclusive). If none fits, returns (-1, -1).
     """
-    cue_center = (cue["start_ms"] + cue["end_ms"]) // 2
+    cue_center = (cue["start_s"] + cue["end_s"]) / 2.0
     cue_tokens = _tokenize(cue.get("text", ""))
 
     # Filter candidate segments by time proximity
     candidates: List[int] = []
     for idx, seg in enumerate(segments):
-        # Keep segments whose center is within window_ms
-        seg_center = (seg["start_ms"] + seg["end_ms"]) // 2
-        if abs(seg_center - cue_center) <= window_ms:
+        # Keep segments whose center is within window_s
+        seg_center = (seg["start_s"] + seg["end_s"]) / 2.0
+        if abs(seg_center - cue_center) <= window_s:
             candidates.append(idx)
 
     if not candidates:
@@ -399,11 +411,12 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
             tokens = _tokenize(text)
             sim = _jaccard_similarity(cue_tokens, tokens)
             # Consider also temporal overlap with cue window
-            seg_start = segments[i]["start_ms"]
-            seg_end = segments[j - 1]["end_ms"]
-            time_overlap = _overlap_ms(seg_start, seg_end, cue["start_ms"], cue["end_ms"])
+            seg_start = segments[i]["start_s"]
+            seg_end = segments[j - 1]["end_s"]
+            time_overlap = _overlap_s(seg_start, seg_end, cue["start_s"], cue["end_s"])
+            cue_dur = max(1e-6, (cue["end_s"] - cue["start_s"]))
             # Weighted scoring: prioritize token sim, then time overlap
-            score = sim * 0.8 + (time_overlap / max(1, (cue["end_ms"] - cue["start_ms"]))) * 0.2
+            score = sim * 0.8 + (time_overlap / cue_dur) * 0.2
             if score > best_score:
                 best_score = score
                 best_span = (i, j)
@@ -414,7 +427,7 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
         min_d = 1e18
         best_idx = 0
         for i, seg in enumerate(segments):
-            d = abs(((seg["start_ms"] + seg["end_ms"]) // 2) - cue_center)
+            d = abs(((seg["start_s"] + seg["end_s"]) / 2.0) - cue_center)
             if d < min_d:
                 min_d = d
                 best_idx = i
@@ -438,7 +451,7 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     - Preserve punctuation, casing, and token structure.
 
     Returns:
-        Dict with keys: start_ms, end_ms, text, and metadata:
+        Dict with keys: start_s, end_s, text, and metadata:
             _meta: {
                 'overlap': float,
                 'conservative_mode': bool,
@@ -450,8 +463,8 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     if i < 0 or j <= i or i >= len(segments):
         return {}
     segs = segments[i:j]
-    start_ms = segs[0]["start_ms"]
-    end_ms = segs[-1]["end_ms"]
+    start_s = segs[0]["start_s"]
+    end_s = segs[-1]["end_s"]
 
     # Gather transcript tokens and core list
     transcript_text = " ".join(x["text"] for x in segs if x.get("text"))
@@ -463,7 +476,7 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
             transcript_cores.append(tcore)
 
     if not base_cue_text:
-        return {"start_ms": start_ms, "end_ms": end_ms, "text": transcript_text, "_meta": {"overlap": 1.0, "conservative_mode": False, "replacements": [], "kept_tokens": []}}
+        return {"start_s": start_s, "end_s": end_s, "text": transcript_text, "_meta": {"overlap": 1.0, "conservative_mode": False, "replacements": [], "kept_tokens": []}}
 
     sub_tokens_raw = base_cue_text.split() if base_cue_text else []
     sub_cores_for_overlap = []
@@ -547,8 +560,8 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
         corrected_text = transcript_text
 
     return {
-        "start_ms": start_ms,
-        "end_ms": end_ms,
+        "start_s": start_s,
+        "end_s": end_s,
         "text": corrected_text,
         "_meta": {
             "overlap": overlap,
@@ -590,50 +603,50 @@ def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tupl
 # --------------------------
 
 def _enforce_ott_constraints(cues: List[Dict[str, Any]],
-                             min_duration_ms: int = 800,
-                             max_duration_ms: int = 8000) -> List[Dict[str, Any]]:
+                             min_duration_s: float = 0.8,
+                             max_duration_s: float = 8.0) -> List[Dict[str, Any]]:
     """
     Enforce basic OTT constraints:
-    - Each cue duration within [min_duration_ms, max_duration_ms]
+    - Each cue duration within [min_duration_s, max_duration_s] seconds
     - No overlaps; adjust by shifting ends or starts slightly
     - Ensure chronological order
     """
     if not cues:
         return []
 
-    cues_sorted = sorted(cues, key=lambda x: (x["start_ms"], x["end_ms"]))
+    cues_sorted = sorted(cues, key=lambda x: (x["start_s"], x["end_s"]))
     fixed: List[Dict[str, Any]] = []
-    prev_end = 0
+    prev_end = 0.0
 
     for i, cue in enumerate(cues_sorted):
-        orig_start = int(cue["start_ms"])
-        orig_end = int(cue["end_ms"])
-        start = max(prev_end, orig_start)
-        end = max(start + 1, orig_end)
+        orig_start = float(cue["start_s"])
+        orig_end = float(cue["end_s"])
+        start = max(prev_end, max(0.0, orig_start))
+        end = max(start + 1e-3, orig_end)
         dur = end - start
         change_reasons = []
 
         # Resolve overlap with previous
-        if start != orig_start:
-            change_reasons.append(f"shift-start-to-avoid-overlap prev_end={prev_end}")
+        if start > orig_start + 1e-9:
+            change_reasons.append(f"shift-start-to-avoid-overlap prev_end={prev_end:.3f}s")
 
         # Clamp duration
-        if dur < min_duration_ms:
-            end = start + min_duration_ms
-            dur = min_duration_ms
-            change_reasons.append(f"min-duration {min_duration_ms}ms")
-        elif dur > max_duration_ms:
-            end = start + max_duration_ms
-            dur = max_duration_ms
-            change_reasons.append(f"max-duration {max_duration_ms}ms")
+        if dur < min_duration_s:
+            end = start + min_duration_s
+            dur = min_duration_s
+            change_reasons.append(f"min-duration {min_duration_s:.3f}s")
+        elif dur > max_duration_s:
+            end = start + max_duration_s
+            dur = max_duration_s
+            change_reasons.append(f"max-duration {max_duration_s:.3f}s")
 
-        if change_reasons or orig_start != start or orig_end != end:
+        if change_reasons or abs(orig_start - start) > 1e-9 or abs(orig_end - end) > 1e-9:
             print(f"[OTT] Cue#{i+1} time adjusted: "
-                  f"{_ms_to_srt_time(orig_start)} --> {_ms_to_srt_time(orig_end)}  "
-                  f"to  {_ms_to_srt_time(start)} --> {_ms_to_srt_time(end)}  "
+                  f"{_s_to_srt_time(orig_start)} --> {_s_to_srt_time(orig_end)}  "
+                  f"to  {_s_to_srt_time(start)} --> {_s_to_srt_time(end)}  "
                   f"reason={'|'.join(change_reasons) if change_reasons else 'normalize'}")
 
-        fixed.append({"start_ms": start, "end_ms": end, "text": cue.get("text", "")})
+        fixed.append({"start_s": start, "end_s": end, "text": cue.get("text", "")})
         prev_end = end
 
     return fixed
@@ -648,22 +661,22 @@ def _merge_and_sort_cues(primary: List[Dict[str, Any]], generated: List[Dict[str
     unique = []
     seen = set()
     for c in all_cues:
-        key = (c["start_ms"], c["end_ms"], c.get("text", ""))
+        key = (round(c["start_s"], 3), round(c["end_s"], 3), c.get("text", ""))
         if key in seen:
             continue
         seen.add(key)
         unique.append(c)
-    return sorted(unique, key=lambda x: (x["start_ms"], x["end_ms"]))
+    return sorted(unique, key=lambda x: (x["start_s"], x["end_s"]))
 
 
 def _reindex_and_format_srt(cues: List[Dict[str, Any]]) -> str:
     """
-    Convert normalized cues to SRT text with reindexing.
+    Convert normalized cues to SRT text with reindexing (from seconds).
     """
     lines: List[str] = []
     for idx, cue in enumerate(cues, start=1):
-        start = _ms_to_srt_time(int(cue["start_ms"]))
-        end = _ms_to_srt_time(int(cue["end_ms"]))
+        start = _s_to_srt_time(float(cue["start_s"]))
+        end = _s_to_srt_time(float(cue["end_s"]))
         text = cue.get("text", "")
         # Keep lines reasonable by splitting on explicit newlines only (do not auto-wrap by chars)
         lines.append(str(idx))
@@ -696,10 +709,15 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     Parameters:
         transcript (dict): Whisper-like transcript with 'segments': [{'start': float sec, 'end': float sec, 'text': str}, ...].
                            Optional 'language' key may be present.
-        subtitles (list): List[dict] of cues, each with any of: start/end (sec), start_ms/end_ms (ms), text, optional 'language'.
+        subtitles (list): List[dict] of cues, each with any of:
+                          - start/end (seconds, float)
+                          - start_s/end_s (seconds, float)
+                          - legacy start_ms/end_ms (milliseconds, int) which will be converted to seconds
+                          and optional 'language'.
 
     Returns:
-        list: List of corrected cues with structure: {'start_ms': int, 'end_ms': int, 'text': str}.
+        list: List of corrected cues with structure: {'start': float seconds, 'end': float seconds, 'text': str}.
+              All timestamps are in seconds.
               This function is pure and performs no file I/O.
     """
     if not isinstance(transcript, dict) or not isinstance(subtitles, list):
@@ -709,11 +727,32 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     cues_in = _normalize_subtitle_cues(subtitles)
 
     if not segments or not cues_in:
-        return cues_in
+        # Ensure we return in seconds API format
+        return [{"start": c.get("start_s", 0.0), "end": c.get("end_s", c.get("start_s", 0.0)), "text": c.get("text", "")} for c in cues_in]
 
     if not _likely_same_language(transcript, cues_in):
         print("[CorrectSubtitles] Language mismatch detected; returning original subtitles unchanged.")
-        return subtitles
+        # Normalize original subtitles to seconds format for output consistency
+        normalized_out = []
+        for c in subtitles:
+            if isinstance(c, dict):
+                if "start_s" in c and "end_s" in c:
+                    start = _safe_float(c.get("start_s"))
+                    end = _safe_float(c.get("end_s"))
+                elif "start_ms" in c and "end_ms" in c:
+                    start = _safe_float(c.get("start_ms")) / 1000.0
+                    end = _safe_float(c.get("end_ms")) / 1000.0
+                else:
+                    start = _safe_float(c.get("start"))
+                    end = _safe_float(c.get("end"))
+                if not math.isfinite(start):
+                    start = 0.0
+                if not math.isfinite(end):
+                    end = start
+                if end < start:
+                    end = start + 1e-3
+                normalized_out.append({"start": start, "end": end, "text": c.get("text", "")})
+        return normalized_out
 
     # Counters for safeguard reporting
     changed_time = 0
@@ -730,9 +769,9 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             # This ensures start times correspond to real speech window.
             nearest_idx = None
             min_d = 1e18
-            cue_center = (cue["start_ms"] + cue["end_ms"]) // 2
+            cue_center = (cue["start_s"] + cue["end_s"]) / 2.0
             for i, seg in enumerate(segments):
-                d = abs(((seg["start_ms"] + seg["end_ms"]) // 2) - cue_center)
+                d = abs(((seg["start_s"] + seg["end_s"]) / 2.0) - cue_center)
                 if d < min_d:
                     min_d = d
                     nearest_idx = i
@@ -741,7 +780,7 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
                 print(f"[Align] Cue#{idx}: No text match; snapped to nearest transcript segment {nearest_idx}.")
             else:
                 print(f"[Align] Cue#{idx}: No transcript available; keeping original timing and text.")
-                aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
+                aligned_cues.append({"start_s": cue["start_s"], "end_s": cue["end_s"], "text": cue.get("text", "")})
                 continue
 
         used_spans.append(span)
@@ -749,31 +788,31 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
 
         if not corrected:
             print(f"[Align] Cue#{idx}: Failed to build corrected cue; keeping original.")
-            aligned_cues.append({"start_ms": cue["start_ms"], "end_ms": cue["end_ms"], "text": cue.get("text", "")})
+            aligned_cues.append({"start_s": cue["start_s"], "end_s": cue["end_s"], "text": cue.get("text", "")})
             continue
 
         # Always clamp cue to the transcript span window first (snap/clamp)
-        seg_start = segments[span[0]]["start_ms"]
-        seg_end = segments[span[1]-1]["end_ms"]
-        new_start = max(seg_start, corrected["start_ms"])
-        new_end = min(seg_end, corrected["end_ms"])
+        seg_start = segments[span[0]]["start_s"]
+        seg_end = segments[span[1] - 1]["end_s"]
+        new_start = max(seg_start, corrected["start_s"])
+        new_end = min(seg_end, corrected["end_s"])
         # Ensure within the transcript span; if inverted due to min/max, expand to span
         if new_end <= new_start:
             new_start = seg_start
             new_end = seg_end
 
         # Track and log timestamp changes from original cue to aligned window prior to OTT
-        if new_start != cue["start_ms"] or new_end != cue["end_ms"]:
+        if abs(new_start - cue["start_s"]) > 1e-9 or abs(new_end - cue["end_s"]) > 1e-9:
             changed_time += 1
             print(
                 f"[Align] Cue#{idx} time changed: "
-                f"{_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}  "
-                f"to  {_ms_to_srt_time(new_start)} --> {_ms_to_srt_time(new_end)} (snap-to-transcript)"
+                f"{_s_to_srt_time(cue['start_s'])} --> {_s_to_srt_time(cue['end_s'])}  "
+                f"to  {_s_to_srt_time(new_start)} --> {_s_to_srt_time(new_end)} (snap-to-transcript)"
             )
 
         # Replace corrected timing
-        corrected["start_ms"] = new_start
-        corrected["end_ms"] = new_end
+        corrected["start_s"] = new_start
+        corrected["end_s"] = new_end
 
         # Log text changes and token-level replacements
         old_text = cue.get("text", "") or ""
@@ -797,16 +836,16 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     missing = _generate_missing_cues(segments, used_spans)
     for m in missing:
         print(f"[Generate] New cue created for uncovered transcript span: "
-              f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])} | {m.get('text','')[:80]}")
+              f"{_s_to_srt_time(m['start_s'])} --> {_s_to_srt_time(m['end_s'])} | {m.get('text','')[:80]}")
 
     merged = _merge_and_sort_cues(aligned_cues, missing)
 
     # Before OTT, detect overlong durations and log that they will be clamped
     for i, c in enumerate(merged, start=1):
-        dur = c["end_ms"] - c["start_ms"]
-        if dur > 8000:
+        dur = c["end_s"] - c["start_s"]
+        if dur > 8.0:
             duration_clamped += 1
-            print(f"[Duration] Cue#{i} overlong ({dur} ms); will be clamped to OTT max.")
+            print(f"[Duration] Cue#{i} overlong ({dur:.3f} s); will be clamped to OTT max.")
 
     constrained = _enforce_ott_constraints(merged)
 
@@ -814,10 +853,10 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     for i, cue in enumerate(constrained):
         if i < len(merged):
             m = merged[i]
-            if m["start_ms"] != cue["start_ms"] or m["end_ms"] != cue["end_ms"]:
+            if abs(m["start_s"] - cue["start_s"]) > 1e-9 or abs(m["end_s"] - cue["end_s"]) > 1e-9:
                 print(f"[OTT-Final] Cue#{i+1} final time: "
-                      f"{_ms_to_srt_time(m['start_ms'])} --> {_ms_to_srt_time(m['end_ms'])}  "
-                      f"to  {_ms_to_srt_time(cue['start_ms'])} --> {_ms_to_srt_time(cue['end_ms'])}")
+                      f"{_s_to_srt_time(m['start_s'])} --> {_s_to_srt_time(m['end_s'])}  "
+                      f"to  {_s_to_srt_time(cue['start_s'])} --> {_s_to_srt_time(cue['end_s'])}")
 
     # Safeguard summary
     total_cues = len(cues_in)
@@ -828,7 +867,8 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
         print(f"[Summary] Cues processed: {total_cues} | time-adjusted: {changed_time} | "
               f"text-changed: {changed_text} | duration-clamped: {duration_clamped}")
 
-    return constrained
+    # Output in seconds API format
+    return [{"start": c["start_s"], "end": c["end_s"], "text": c.get("text", "")} for c in constrained]
 
 
 # PUBLIC_INTERFACE
@@ -839,6 +879,10 @@ def apply_additional_compliance_fixes(path: str, processed_dir: str) -> str:
     This function currently performs a simple copy to a new file in processed_dir
     to act as a hook for future compliance operations (e.g., reading speed checks,
     punctuation normalization, spacing rules). It intentionally contains file I/O.
+
+    Note:
+    - This function reads/writes subtitle files as text. It does not alter timestamps.
+    - The rest of the module uses seconds for all timestamp logic.
 
     Parameters:
         path (str): Path to the corrected subtitle file to post-process.
