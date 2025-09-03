@@ -1,5 +1,5 @@
 """
-Additional correction and compliance helpers.
+Subtitle correction module (fully encapsulated, no external helper dependencies).
 
 This module provides:
 - correct_subtitles: language-agnostic alignment of subtitle cues to a Whisper-like transcript
@@ -10,7 +10,8 @@ Design principles:
 - Optional language mismatch handling: if transcript/subtitles languages clearly differ (via 'language' field or
   normalized script mismatch heuristic), return the original subtitles unchanged.
 - OTT timing constraints enforcement: min/max cue duration, no overlaps, basic gap handling.
-- Pure functions only; no file I/O except apply_additional_compliance_fixes which copies a file by design elsewhere.
+- Pure functions only; the only file I/O is within apply_additional_compliance_fixes, by design.
+- ALL helper functions live in this file to ensure encapsulation and ease of maintenance.
 """
 
 from pathlib import Path
@@ -679,7 +680,8 @@ def _reindex_and_format_srt(cues: List[Dict[str, Any]]) -> str:
 
 # PUBLIC_INTERFACE
 def correct_subtitles(transcript: dict, subtitles: list) -> list:
-    """Align and correct per-cue timestamps and text using the provided transcript.
+    """
+    Align and correct per-cue timestamps and text using the provided transcript.
 
     Behavior:
     - Language-agnostic: uses Unicode normalization and whitespace tokenization only.
@@ -691,14 +693,14 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     - Enforce OTT timing constraints (min/max duration) and remove overlaps; reindex cues.
     - Edge cases: empty inputs return empty list.
 
-    Args:
-        transcript: Whisper-like transcript dict with 'segments': [{'start': float sec, 'end': float sec, 'text': str}, ...]
-                    Optional 'language' key may be present.
-        subtitles: List of cues, each dict containing any of: start/end (sec), start_ms/end_ms (ms), text, optional 'language'.
+    Parameters:
+        transcript (dict): Whisper-like transcript with 'segments': [{'start': float sec, 'end': float sec, 'text': str}, ...].
+                           Optional 'language' key may be present.
+        subtitles (list): List[dict] of cues, each with any of: start/end (sec), start_ms/end_ms (ms), text, optional 'language'.
 
     Returns:
-        List of corrected cues with structure: {'start_ms': int, 'end_ms': int, 'text': str}
-        This function is pure and performs no file I/O.
+        list: List of corrected cues with structure: {'start_ms': int, 'end_ms': int, 'text': str}.
+              This function is pure and performs no file I/O.
     """
     if not isinstance(transcript, dict) or not isinstance(subtitles, list):
         return subtitles or []
@@ -831,14 +833,19 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
 
 # PUBLIC_INTERFACE
 def apply_additional_compliance_fixes(path: str, processed_dir: str) -> str:
-    """Apply post-processing corrections; for now, return a copy to a new file.
+    """
+    Apply post-processing compliance fixes to a corrected subtitle file.
 
-    Args:
-        path: Path to the corrected subtitle file to post-process.
-        processed_dir: Directory to write the resulting file into.
+    This function currently performs a simple copy to a new file in processed_dir
+    to act as a hook for future compliance operations (e.g., reading speed checks,
+    punctuation normalization, spacing rules). It intentionally contains file I/O.
+
+    Parameters:
+        path (str): Path to the corrected subtitle file to post-process.
+        processed_dir (str): Directory to write the resulting file into.
 
     Returns:
-        Absolute path to the newly written file in processed_dir.
+        str: Absolute path to the newly written file in processed_dir.
     """
     src = Path(path)
     content = src.read_text(encoding="utf-8", errors="ignore")
