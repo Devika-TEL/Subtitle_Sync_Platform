@@ -1097,8 +1097,19 @@ def hybrid_correct_subtitles(
     """
     # Stage 1: fast correction (text/time-based)
     stage1 = correct_subtitles(transcript, subtitles)
+    # Determine input format to propagate to output ("srt" default if unspecified)
+    input_format = None
+    if isinstance(subtitles, list) and subtitles:
+        first = subtitles[0]
+        if isinstance(first, dict):
+            input_format = first.get("format")
+    if not input_format:
+        # Attempt to infer from presence of SRT-like fields in input; fall back to 'srt'
+        input_format = "srt"
+
     if not stage1:
-        return stage1
+        # Return empty list in the new schema
+        return []
 
     # Prepare transcript segments and (optional) audio
     segments = _flatten_transcript_segments(transcript)
@@ -1113,8 +1124,6 @@ def hybrid_correct_subtitles(
 
     # Heuristics to flag problematic cues for Stage 2
     def is_problematic(cue: Dict[str, Any], ref_text: str) -> bool:
-        # Flag if similarity is low, or durations extreme (even though OTT already clamped in Stage 1),
-        # or if cue text is empty while ref exists.
         n_sub = _normalize_text(cue.get("text", "") or "")
         n_ref = _normalize_text(ref_text or "")
         if not n_ref:
@@ -1152,10 +1161,29 @@ def hybrid_correct_subtitles(
             stage2.append(cue)
 
     # Stage 3: final OTT compliance safeguard
+    final_list: List[Dict[str, Any]] = []
     if enforce_ott_post:
         # Convert to internal shape for enforcement
         internal = [{"start_s": c["start"], "end_s": c["end"], "text": c.get("text", "")} for c in stage2]
         final_cues = _enforce_ott_constraints(internal)
-        return [{"start": c["start_s"], "end": c["end_s"], "text": c.get("text", "")} for c in final_cues]
+        # Reindex and map to required output schema
+        for idx, c in enumerate(final_cues, start=1):
+            final_list.append({
+                "index": idx,
+                "start": c["start_s"],
+                "end": c["end_s"],
+                "text": c.get("text", ""),
+                "format": input_format,
+            })
     else:
-        return stage2
+        # No extra enforcement; just map to required output schema with reindex
+        for idx, c in enumerate(stage2, start=1):
+            final_list.append({
+                "index": idx,
+                "start": c.get("start", 0.0),
+                "end": c.get("end", c.get("start", 0.0)),
+                "text": c.get("text", ""),
+                "format": input_format,
+            })
+
+    return final_list
