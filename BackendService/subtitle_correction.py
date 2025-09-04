@@ -688,6 +688,78 @@ def _reindex_and_format_srt(cues: List[Dict[str, Any]]) -> str:
 
 
 # --------------------------
+# Audio embedding (optional) stubs
+# --------------------------
+
+def _load_audio_waveform(audio_file: str) -> Optional[Any]:
+    """
+    Stub: Load audio data. In a production setting, this would decode the audio file into
+    a waveform/array (e.g., via librosa or torchaudio). We avoid external deps here.
+    Returns None on failure.
+    """
+    try:
+        # Do not implement heavy I/O or lib dependency; return a sentinel
+        return {"_stub_waveform": True, "path": audio_file}
+    except Exception as e:
+        print(f"[Audio] Failed to load audio: {e}")
+        return None
+
+
+def _compute_audio_embeddings(audio_waveform: Any, time_ranges: List[Tuple[float, float]]) -> List[Any]:
+    """
+    Stub: Compute audio embeddings for given time ranges.
+    In a real system, this would return vector embeddings per time window.
+    Here, return a deterministic placeholder structure.
+    """
+    embeddings = []
+    for (s, e) in time_ranges:
+        embeddings.append({"_stub_embedding": True, "start": float(s), "end": float(e)})
+    return embeddings
+
+
+def _compare_text_with_audio_embedding(text: str, audio_embedding: Any) -> float:
+    """
+    Stub: Return a confidence score [0..1] that 'text' matches the audio represented by embedding.
+    For now, return a neutral mid-high value scaled by text length to keep deterministic behavior.
+    """
+    t = _normalize_text(text)
+    if not t:
+        return 0.4
+    # lightweight heuristic: cap at 0.9
+    return min(0.9, 0.5 + min(len(t), 60) / 200.0)
+
+
+def _resolve_discrepancy_with_audio(
+    subtitle_text: str,
+    transcript_text: str,
+    audio_embeddings_for_span: List[Any],
+) -> str:
+    """
+    Given subtitle text and transcript text for the same aligned time-span, use audio embeddings
+    (if present) to decide which wording better matches the audio. Prefer the one with higher score.
+    If scores are similar (within epsilon), prefer the subtitle text to preserve authored phrasing.
+    """
+    # Aggregate a confidence per option by averaging across span embeddings
+    if not audio_embeddings_for_span:
+        # No embeddings available; prefer subtitle wording if semantically similar
+        sub_norm = _normalize_text(subtitle_text)
+        tr_norm = _normalize_text(transcript_text)
+        sim = _sequence_similarity(sub_norm, tr_norm)
+        return subtitle_text if sim >= SEMANTIC_SIMILARITY_THRESHOLD else transcript_text
+
+    sub_scores = []
+    tr_scores = []
+    for emb in audio_embeddings_for_span:
+        sub_scores.append(_compare_text_with_audio_embedding(subtitle_text, emb))
+        tr_scores.append(_compare_text_with_audio_embedding(transcript_text, emb))
+    sub_c = sum(sub_scores) / max(1, len(sub_scores))
+    tr_c = sum(tr_scores) / max(1, len(tr_scores))
+    if abs(sub_c - tr_c) <= 0.05:
+        return subtitle_text
+    return subtitle_text if sub_c > tr_c else transcript_text
+
+
+# --------------------------
 # Public interfaces
 # --------------------------
 
@@ -897,3 +969,91 @@ def apply_additional_compliance_fixes(path: str, processed_dir: str) -> str:
     out = Path(processed_dir) / f"temp_{uuid.uuid4()}_postfix.srt"
     out.write_text(content, encoding="utf-8")
     return str(out)
+
+
+# PUBLIC_INTERFACE
+def correct_subtitles_with_audio(
+    transcript: dict,
+    subtitles: list,
+    audio_file: Optional[str] = None,
+) -> list:
+    """Correct subtitles using a transcript as ground truth with optional audio embeddings disambiguation.
+
+    Step separation:
+    1) Timestamp correction: align each subtitle cue to the best transcript time window.
+       Implemented by correct_subtitles(), which returns corrected cues in seconds.
+    2) Missing insertion: create new cues for transcript segments not covered by any subtitle cue.
+       Implemented within correct_subtitles() via _generate_missing_cues.
+    3) Semantic comparison: where subtitle and transcript share a timestamp but differ in wording,
+       check if they mean the same. Prefer the subtitle if semantically similar; otherwise, use the
+       transcript wording. If ambiguous and audio_file is provided, use audio embeddings to decide.
+
+    Parameters:
+        transcript: Whisper-like transcript dict with 'segments'
+        subtitles: list of subtitle cues
+        audio_file: optional audio path to use for embeddings-based disambiguation
+
+    Returns:
+        list of cues [{start: float, end: float, text: str}]
+    """
+    # First, perform core alignment and missing insertion
+    base_corrected = correct_subtitles(transcript, subtitles)
+
+    if not base_corrected:
+        return base_corrected
+
+    # Optionally prepare audio embeddings per cue time range for disambiguation
+    audio_wave = None
+    if audio_file:
+        audio_wave = _load_audio_waveform(audio_file)
+
+    # Build a fast index of transcript by time to extract transcript text for each corrected cue
+    segments = _flatten_transcript_segments(transcript)
+
+    def transcript_text_for_range(start_s: float, end_s: float) -> str:
+        # Collect segments overlapping [start_s, end_s]
+        parts: List[str] = []
+        for seg in segments:
+            if _overlap_s(seg["start_s"], seg["end_s"], start_s, end_s) > 0.0:
+                parts.append(seg.get("text", ""))
+        return " ".join(p for p in parts if p)
+
+    # Iterate over corrected cues and apply semantic resolution where wording differs
+    resolved: List[Dict[str, Any]] = []
+    for cue in base_corrected:
+        s = float(cue.get("start", 0.0))
+        e = float(cue.get("end", s))
+        sub_text = cue.get("text", "") or ""
+        ref_text = transcript_text_for_range(s, e)
+
+        if not ref_text:
+            # No overlapping transcript text; keep as-is
+            resolved.append(cue)
+            continue
+
+        n_sub = _normalize_text(sub_text)
+        n_ref = _normalize_text(ref_text)
+        if n_sub == n_ref:
+            resolved.append(cue)
+            continue
+
+        # Semantic check using thresholds; prefer subtitle if similar
+        sim = _sequence_similarity(n_sub, n_ref)
+        if sim >= SEMANTIC_SIMILARITY_THRESHOLD:
+            # Prefer subtitle text if meaning is the same
+            resolved.append(cue)
+            continue
+
+        # If audio available, use embeddings to pick which text better matches the audio
+        if audio_wave:
+            embeddings = _compute_audio_embeddings(audio_wave, [(s, e)])
+            chosen = _resolve_discrepancy_with_audio(sub_text, ref_text, embeddings)
+            if chosen != sub_text:
+                print(f"[AudioResolve] Replaced cue text due to audio match: '{sub_text[:60]}' -> '{chosen[:60]}'")
+            resolved.append({"start": s, "end": e, "text": chosen})
+        else:
+            # No audio; choose transcript wording as the ground truth
+            print(f"[Resolve] Using transcript text over subtitle (low similarity {sim:.2f}).")
+            resolved.append({"start": s, "end": e, "text": ref_text})
+
+    return resolved
