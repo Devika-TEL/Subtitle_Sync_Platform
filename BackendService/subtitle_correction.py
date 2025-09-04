@@ -1057,3 +1057,105 @@ def correct_subtitles_with_audio(
             resolved.append({"start": s, "end": e, "text": ref_text})
 
     return resolved
+
+
+# PUBLIC_INTERFACE
+def hybrid_correct_subtitles(
+    transcript: dict,
+    subtitles: list,
+    audio_file: Optional[str] = None,
+    enforce_ott_post: bool = True,
+) -> list:
+    """Hybrid subtitle correction pipeline with staged processing.
+
+    Stage 1 (Fast pass):
+        - Run non-embedding corrections: alignment to transcript, fix overlaps, enforce basic OTT min/max,
+          and insert missing cues (text/time heuristics only).
+
+    Stage 2 (Conditional audio-embedding pass):
+        - For cues still exhibiting unresolved issues (low semantic similarity vs overlapping transcript text,
+          or suspected drift/overlap anomalies), optionally use audio embeddings if an audio file is provided.
+          Only apply to those problematic cues to save compute.
+
+    Stage 3 (Post-process compliance):
+        - Ensure final OTT/accessibility conformance (min/max duration, no overlaps). This is an extra safeguard,
+          applied after potential Stage 2 text replacements.
+
+    Parameters:
+        transcript: Whisper-like transcript dict with 'segments'
+        subtitles: list of subtitle cues (dicts)
+        audio_file: optional audio file path used to compute embeddings for targeted cues
+        enforce_ott_post: whether to run a final OTT enforcement pass (default True)
+
+    Returns:
+        list of cues [{start: float, end: float, text: str}] in seconds.
+
+    Notes:
+        - The audio embedding functionality is implemented as a stub here to keep the code self-contained.
+          Replace _load_audio_waveform/_compute_audio_embeddings/_compare_text_with_audio_embedding with
+          real audio processing for production use.
+    """
+    # Stage 1: fast correction (text/time-based)
+    stage1 = correct_subtitles(transcript, subtitles)
+    if not stage1:
+        return stage1
+
+    # Prepare transcript segments and (optional) audio
+    segments = _flatten_transcript_segments(transcript)
+    audio_wave = _load_audio_waveform(audio_file) if audio_file else None
+
+    def transcript_text_for_range(start_s: float, end_s: float) -> str:
+        parts: List[str] = []
+        for seg in segments:
+            if _overlap_s(seg["start_s"], seg["end_s"], start_s, end_s) > 0.0:
+                parts.append(seg.get("text", ""))
+        return " ".join(p for p in parts if p)
+
+    # Heuristics to flag problematic cues for Stage 2
+    def is_problematic(cue: Dict[str, Any], ref_text: str) -> bool:
+        # Flag if similarity is low, or durations extreme (even though OTT already clamped in Stage 1),
+        # or if cue text is empty while ref exists.
+        n_sub = _normalize_text(cue.get("text", "") or "")
+        n_ref = _normalize_text(ref_text or "")
+        if not n_ref:
+            return False
+        sim = _sequence_similarity(n_sub, n_ref)
+        dur = float(cue.get("end", cue.get("start", 0.0))) - float(cue.get("start", 0.0))
+        if n_sub == "":
+            return True
+        if sim < 0.70:
+            return True
+        if dur < 0.6 or dur > 9.0:
+            return True
+        return False
+
+    # Stage 2: only for problematic cues, and only if audio is available
+    stage2: List[Dict[str, Any]] = []
+    for cue in stage1:
+        s = float(cue.get("start", 0.0))
+        e = float(cue.get("end", s))
+        sub_text = cue.get("text", "") or ""
+        ref_text = transcript_text_for_range(s, e)
+
+        if not ref_text:
+            stage2.append(cue)
+            continue
+
+        if audio_wave and is_problematic(cue, ref_text):
+            embeddings = _compute_audio_embeddings(audio_wave, [(s, e)])
+            chosen = _resolve_discrepancy_with_audio(sub_text, ref_text, embeddings)
+            if chosen != sub_text:
+                print(f"[Hybrid-Stage2] Audio-resolved cue text: '{sub_text[:60]}' -> '{chosen[:60]}'")
+            stage2.append({"start": s, "end": e, "text": chosen})
+        else:
+            # Keep Stage 1 decision (which already prefers subtitle if semantically similar)
+            stage2.append(cue)
+
+    # Stage 3: final OTT compliance safeguard
+    if enforce_ott_post:
+        # Convert to internal shape for enforcement
+        internal = [{"start_s": c["start"], "end_s": c["end"], "text": c.get("text", "")} for c in stage2]
+        final_cues = _enforce_ott_constraints(internal)
+        return [{"start": c["start_s"], "end": c["end_s"], "text": c.get("text", "")} for c in final_cues]
+    else:
+        return stage2
