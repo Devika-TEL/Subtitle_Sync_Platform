@@ -216,7 +216,7 @@ def _normalize_subtitle_cues(subtitles: List[Dict[str, Any]]) -> List[Dict[str, 
 # Tunable thresholds for semantic preservation and fuzzy spelling detection
 SEMANTIC_SIMILARITY_THRESHOLD = 0.86  # if >= keep subtitle core as-is (semantic match/near-identical)
 FUZZY_SPELLING_THRESHOLD = 0.72       # if >= treat as likely typo and replace with transcript word
-LOW_OVERLAP_SKIP_THRESHOLD = 0.18     # if window overlap less than this, skip aggressive correction
+LOW_OVERLAP_SKIP_THRESHOLD = 0.10     # lower threshold so we still attempt some corrections for sparse overlap
 
 
 # Minimal synonym/lemma map (internal only; no external deps)
@@ -398,6 +398,15 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
 
     best_score = -1.0
     best_span = (-1, -1)
+    best_time_idx = None
+    # track nearest by time to ensure we always pick something
+    min_time_dist = float("inf")
+    for i, seg in enumerate(segments):
+        seg_center = (seg["start_s"] + seg["end_s"]) / 2.0
+        d = abs(seg_center - cue_center)
+        if d < min_time_dist:
+            min_time_dist = d
+            best_time_idx = i
 
     # Evaluate small windows around candidates: single seg and neighboring joins
     for idx in candidates:
@@ -420,6 +429,10 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
             if score > best_score:
                 best_score = score
                 best_span = (i, j)
+
+    # If we still don't have a text-similarity winner, fall back to nearest-by-time
+    if best_span == (-1, -1) and best_time_idx is not None:
+        return (best_time_idx, min(len(segments), best_time_idx + 1))
 
     # If tokens are empty, just align by time nearest single segment
     if not cue_tokens and best_span == (-1, -1) and segments:
@@ -496,18 +509,21 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
     for sub_tok in sub_tokens_raw:
         lead, core, trail = _split_token_core_punct(sub_tok)
         if core == "":
+            # punctuation-only token; try to advance transcript index to keep sync
+            if t_idx < len(transcript_cores):
+                t_idx += 1
             corrected_tokens.append(sub_tok)
             kept_tokens.append(sub_tok)
             continue
 
         if conservative_mode:
-            # Allow only very strong fuzzy correction even in conservative mode
+            # Allow medium-high fuzzy correction in conservative mode to still fix obvious typos
             mapped_core = core
             if transcript_cores:
                 cand, score = _best_fuzzy_match(core, transcript_cores)
-                if score >= max(FUZZY_SPELLING_THRESHOLD, 0.90):  # very high confidence
+                if score >= max(FUZZY_SPELLING_THRESHOLD, 0.80):
                     mapped_core = _apply_case_like(cand, core)
-                    replacements.append({"from": core, "to": mapped_core, "reason": "fuzzy-high-conservative", "score": score})
+                    replacements.append({"from": core, "to": mapped_core, "reason": "fuzzy-conservative", "score": score})
                 else:
                     kept_tokens.append(core)
             # Advance index lightly to keep relative progression
@@ -548,10 +564,14 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
                 mapped_core = _apply_case_like(cand, core)
                 replacements.append({"from": core, "to": mapped_core, "reason": "fuzzy", "score": score})
             else:
-                # Soft sequential guide (fallback) - keep original core but advance index
+                # Soft sequential guide (fallback) - map to next transcript core if available
                 if t_idx < len(transcript_cores):
+                    cand = transcript_cores[t_idx]
+                    mapped_core = _apply_case_like(cand, core)
+                    replacements.append({"from": core, "to": mapped_core, "reason": "sequential-fallback", "score": 0.0})
                     t_idx += 1
-                kept_tokens.append(core)
+                else:
+                    kept_tokens.append(core)
 
         corrected_tokens.append(f"{lead}{mapped_core}{trail}")
 
@@ -591,6 +611,17 @@ def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tupl
         while k < len(segments) and not covered[k]:
             k += 1
         run_end = k  # exclusive
+        # Merge tiny uncovered runs with neighbors to avoid micro-cues
+        # If the resulting duration is < 0.4s and we can expand by one neighbor, do so
+        if run_end - run_start == 1:
+            seg_dur = segments[run_start]["end_s"] - segments[run_start]["start_s"]
+            if seg_dur < 0.4:
+                # try to expand backward
+                if run_start - 1 >= 0 and not covered[run_start - 1]:
+                    run_start -= 1
+                # or forward
+                elif run_end < len(segments) and not covered[run_end]:
+                    run_end += 1
         # Build a cue from run [run_start, run_end)
         cue = _build_corrected_cue_from_segments((run_start, run_end), segments)
         if cue:
@@ -866,10 +897,11 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
         # Always clamp cue to the transcript span window first (snap/clamp)
         seg_start = segments[span[0]]["start_s"]
         seg_end = segments[span[1] - 1]["end_s"]
-        new_start = max(seg_start, corrected["start_s"])
-        new_end = min(seg_end, corrected["end_s"])
-        # Ensure within the transcript span; if inverted due to min/max, expand to span
-        if new_end <= new_start:
+        # Hard clamp to transcript span to make transcript the ground truth
+        new_start = max(seg_start, min(corrected["start_s"], seg_end))
+        new_end = min(seg_end, max(corrected["end_s"], seg_start))
+        # Ensure valid ordering; if inverted or too tight, set exactly to span
+        if new_end <= new_start or (new_end - new_start) < 1e-3:
             new_start = seg_start
             new_end = seg_end
 
@@ -909,6 +941,7 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     for m in missing:
         print(f"[Generate] New cue created for uncovered transcript span: "
               f"{_s_to_srt_time(m['start_s'])} --> {_s_to_srt_time(m['end_s'])} | {m.get('text','')[:80]}")
+    generated_count = len(missing)
 
     merged = _merge_and_sort_cues(aligned_cues, missing)
 
@@ -932,12 +965,12 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
 
     # Safeguard summary
     total_cues = len(cues_in)
-    if changed_time == 0 and changed_text == 0 and duration_clamped == 0:
+    if changed_time == 0 and changed_text == 0 and duration_clamped == 0 and generated_count == 0:
         print("[Summary] No cues were modified by alignment, text correction, or OTT duration clamping. "
               "Verify similarity thresholds and input transcript accuracy.")
     else:
         print(f"[Summary] Cues processed: {total_cues} | time-adjusted: {changed_time} | "
-              f"text-changed: {changed_text} | duration-clamped: {duration_clamped}")
+              f"text-changed: {changed_text} | duration-clamped: {duration_clamped} | generated-missing: {generated_count}")
 
     # Output in seconds API format
     return [{"start": c["start_s"], "end": c["end_s"], "text": c.get("text", "")} for c in constrained]
