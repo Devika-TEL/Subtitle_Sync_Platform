@@ -449,6 +449,54 @@ def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[s
     return best_span
 
 
+def _get_span_times(span: Tuple[int, int], segments: List[Dict[str, Any]], strategy: str = "transcript", audio_waveform: Optional[Any] = None) -> Tuple[float, float]:
+    """
+    Return (start_s, end_s) for a given transcript span using the selected strategy.
+
+    strategy:
+      - "transcript": use transcript segment boundaries as cue timing. This is the current default.
+      - "audio": refine boundaries using audio information around the span (requires audio_waveform).
+                 For now, this path calls a stub and returns transcript timings unchanged.
+
+    How to integrate pure Audio–Subtitle alignment:
+      - Replace _refine_timing_with_audio with a real audio boundary detector that, given the rough
+        transcript span and available audio waveform, finds precise speech onset/offset.
+      - Then call _get_span_times(..., strategy="audio", audio_waveform=wave) inside correct_subtitles()
+        or expose an alternate public API that enables audio timing refinement.
+
+    Note: We keep this helper separate so swapping strategies requires minimal change.
+    """
+    i, j = span
+    if i < 0 or j <= i:
+        return (0.0, 0.0)
+    # Default transcript timing
+    start_s = float(segments[i]["start_s"])
+    end_s = float(segments[j - 1]["end_s"])
+
+    if strategy == "audio" and audio_waveform is not None:
+        # Return refined boundaries (currently a stub that returns same values)
+        start_s, end_s = _refine_timing_with_audio(start_s, end_s, audio_waveform)
+
+    return (start_s, end_s)
+
+
+def _refine_timing_with_audio(start_s: float, end_s: float, audio_waveform: Any) -> Tuple[float, float]:
+    """
+    Stub: Given an initial time window [start_s, end_s] and the audio waveform,
+    return refined timing boundaries aligned to speech onset/offset.
+
+    Expected production behavior:
+      - Compute energy/phoneme probabilities or use a VAD/ASR alignment model (CTC/DTW-based)
+        to find the most likely speech region boundaries for the text that falls within
+        this approximate span.
+      - Return (refined_start, refined_end) within [start_s, end_s] or slightly expanded
+        if needed (subject to OTT constraints elsewhere).
+
+    Current behavior:
+      - Return (start_s, end_s) unchanged to keep transcript timing as the authoritative source.
+    """
+    return (float(start_s), float(end_s))
+
 def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dict[str, Any]], base_cue_text: Optional[str] = None) -> Dict[str, Any]:
     """
     Build a corrected cue covering the given segment span.
@@ -976,11 +1024,9 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             aligned_cues.append({"start_s": cue["start_s"], "end_s": cue["end_s"], "text": cue.get("text", "")})
             continue
 
-        # Snap cue exactly to the transcript span window (exact start and end)
-        seg_start = segments[span[0]]["start_s"]
-        seg_end = segments[span[1] - 1]["end_s"]
-        new_start = seg_start
-        new_end = seg_end
+        # Snap cue to the aligned span using the current timing strategy (transcript-based for now).
+        # For future audio alignment, switch strategy to 'audio' and provide an audio waveform.
+        new_start, new_end = _get_span_times(span, segments)
 
         # Track and log timestamp changes from original cue to aligned window prior to OTT
         if abs(new_start - cue["start_s"]) > 1e-9 or abs(new_end - cue["end_s"]) > 1e-9:
