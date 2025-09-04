@@ -633,14 +633,24 @@ def _generate_missing_cues(segments: List[Dict[str, Any]], used_spans: List[Tupl
 # OTT timing constraints
 # --------------------------
 
-def _enforce_ott_constraints(cues: List[Dict[str, Any]],
-                             min_duration_s: float = 0.8,
-                             max_duration_s: float = 8.0) -> List[Dict[str, Any]]:
+def _enforce_ott_constraints(
+    cues: List[Dict[str, Any]],
+    min_duration_s: float = 0.8,
+    max_duration_s: float = 8.0,
+    global_max_end_s: Optional[float] = None,
+) -> List[Dict[str, Any]]:
     """
     Enforce basic OTT constraints:
     - Each cue duration within [min_duration_s, max_duration_s] seconds
     - No overlaps; adjust by shifting ends or starts slightly
     - Ensure chronological order
+    - If global_max_end_s is provided (e.g., transcript/video end), clamp each cue's end to it
+      so no cue extends beyond the available media time.
+
+    When clamping to global_max_end_s:
+    - If a cue starts at/after global_max_end_s, the cue is dropped.
+    - If clamping causes duration < min_duration_s, we keep the clamped end and log the violation,
+      since we cannot extend past the media end. If duration becomes non-positive (<= ~0), drop the cue.
     """
     if not cues:
         return []
@@ -654,14 +664,14 @@ def _enforce_ott_constraints(cues: List[Dict[str, Any]],
         orig_end = float(cue["end_s"])
         start = max(prev_end, max(0.0, orig_start))
         end = max(start + 1e-3, orig_end)
-        dur = end - start
         change_reasons = []
 
         # Resolve overlap with previous
         if start > orig_start + 1e-9:
             change_reasons.append(f"shift-start-to-avoid-overlap prev_end={prev_end:.3f}s")
 
-        # Clamp duration
+        # Apply OTT min/max duration first on the provisional times
+        dur = end - start
         if dur < min_duration_s:
             end = start + min_duration_s
             dur = min_duration_s
@@ -671,11 +681,34 @@ def _enforce_ott_constraints(cues: List[Dict[str, Any]],
             dur = max_duration_s
             change_reasons.append(f"max-duration {max_duration_s:.3f}s")
 
+        # Clamp to global media end if provided
+        if global_max_end_s is not None and math.isfinite(float(global_max_end_s)):
+            media_end = float(global_max_end_s)
+            if start >= media_end:
+                # Fully out of bounds; drop this cue
+                print(f"[OTT] Cue#{i+1} dropped: starts at/after media end {media_end:.3f}s")
+                prev_end = media_end
+                continue
+            if end > media_end:
+                end = media_end
+                change_reasons.append(f"clamp-to-media-end {media_end:.3f}s")
+                dur = end - start
+                if dur < 0.001:
+                    # Too short or non-positive after clamp; drop
+                    print(f"[OTT] Cue#{i+1} dropped: non-positive duration after clamp to media end.")
+                    prev_end = end
+                    continue
+                # If min duration not satisfied due to clamp, record it (we cannot extend past end)
+                if dur < min_duration_s and f"min-duration {min_duration_s:.3f}s" not in change_reasons:
+                    change_reasons.append("min-duration-not-satisfied-due-to-clamp")
+
         if change_reasons or abs(orig_start - start) > 1e-9 or abs(orig_end - end) > 1e-9:
-            print(f"[OTT] Cue#{i+1} time adjusted: "
-                  f"{_s_to_srt_time(orig_start)} --> {_s_to_srt_time(orig_end)}  "
-                  f"to  {_s_to_srt_time(start)} --> {_s_to_srt_time(end)}  "
-                  f"reason={'|'.join(change_reasons) if change_reasons else 'normalize'}")
+            print(
+                f"[OTT] Cue#{i+1} time adjusted: "
+                f"{_s_to_srt_time(orig_start)} --> {_s_to_srt_time(orig_end)}  "
+                f"to  {_s_to_srt_time(start)} --> {_s_to_srt_time(end)}  "
+                f"reason={'|'.join(change_reasons) if change_reasons else 'normalize'}"
+            )
 
         fixed.append({"start_s": start, "end_s": end, "text": cue.get("text", "")})
         prev_end = end
@@ -952,7 +985,9 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             duration_clamped += 1
             print(f"[Duration] Cue#{i} overlong ({dur:.3f} s); will be clamped to OTT max.")
 
-    constrained = _enforce_ott_constraints(merged)
+    # Clamp final cues to the transcript's maximum end time to avoid exceeding media end
+    media_end = max((seg["end_s"] for seg in segments), default=0.0)
+    constrained = _enforce_ott_constraints(merged, global_max_end_s=media_end)
 
     # After OTT, report any further time changes by comparing merged vs constrained
     for i, cue in enumerate(constrained):
@@ -1198,7 +1233,8 @@ def hybrid_correct_subtitles(
     if enforce_ott_post:
         # Convert to internal shape for enforcement
         internal = [{"start_s": c["start"], "end_s": c["end"], "text": c.get("text", "")} for c in stage2]
-        final_cues = _enforce_ott_constraints(internal)
+        media_end = max((seg["end_s"] for seg in segments), default=0.0)
+        final_cues = _enforce_ott_constraints(internal, global_max_end_s=media_end)
         # Reindex and map to required output schema
         for idx, c in enumerate(final_cues, start=1):
             final_list.append({
