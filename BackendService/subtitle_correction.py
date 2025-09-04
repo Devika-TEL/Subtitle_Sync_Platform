@@ -375,78 +375,285 @@ def _apply_case_like(source: str, target_style: str) -> str:
     return source
 
 
-def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[str, Any]], window_s: float = 8.0) -> Tuple[int, int]:
+def _normalize_tokens_cores(text: str) -> List[str]:
     """
-    Find segment index range [i, j) whose concatenated text best matches the cue tokens
-    within a temporal window around the cue time (seconds).
-    Returns (start_index, end_index_exclusive). If none fits, returns (-1, -1).
+    Normalize tokens to their alphanumeric core and lowercase for robust comparison.
+    Punctuation-only tokens are removed.
     """
-    cue_center = (cue["start_s"] + cue["end_s"]) / 2.0
-    cue_tokens = _tokenize(cue.get("text", ""))
+    toks = _tokenize(text)
+    cores: List[str] = []
+    for t in toks:
+        _, c, _ = _split_token_core_punct(t)
+        if c:
+            cores.append(_normalize_core_for_compare(c))
+    return cores
 
-    # Filter candidate segments by time proximity
-    candidates: List[int] = []
-    for idx, seg in enumerate(segments):
-        # Keep segments whose center is within window_s
-        seg_center = (seg["start_s"] + seg["end_s"]) / 2.0
-        if abs(seg_center - cue_center) <= window_s:
-            candidates.append(idx)
 
-    if not candidates:
-        # fallback: all segments
-        candidates = list(range(len(segments)))
+def _max_contiguous_token_run(cue_cores: List[str], win_cores: List[str]) -> Tuple[int, int]:
+    """
+    Compute the maximum contiguous run length between cue_cores and win_cores using synonym-aware equality.
+    Returns (best_len, best_start_index_in_win). If no match, returns (0, -1).
+    """
+    if not cue_cores or not win_cores:
+        return (0, -1)
+    best_len = 0
+    best_start = -1
+    # Build a quick index of win token positions by token to accelerate search
+    index: Dict[str, List[int]] = {}
+    for j, w in enumerate(win_cores):
+        index.setdefault(w, []).append(j)
+    # Iterate cue start positions and try to extend
+    for i, c in enumerate(cue_cores):
+        # Find candidate start positions in window tokens
+        starts = index.get(c, [])
+        # If not exact, try synonyms equivalence by scanning
+        if not starts:
+            for j, w in enumerate(win_cores):
+                if _synonym_or_same(c, w):
+                    starts.append(j)
+        for start in starts:
+            run = 0
+            ii = i
+            jj = start
+            while ii < len(cue_cores) and jj < len(win_cores):
+                if _synonym_or_same(cue_cores[ii], win_cores[jj]):
+                    run += 1
+                    ii += 1
+                    jj += 1
+                else:
+                    break
+            if run > best_len:
+                best_len = run
+                best_start = start
+    return best_len, best_start
 
-    best_score = -1.0
-    best_span = (-1, -1)
-    best_time_idx = None
-    # track nearest by time to ensure we always pick something
+
+def _score_window(cue_text: str, win_text: str, cue_times: Tuple[float, float], win_times: Tuple[float, float]) -> Tuple[float, Dict[str, float], Dict[str, Any]]:
+    """
+    Compute a composite score for a candidate transcript window vs a cue.
+
+    Returns:
+        overall_score, components, aux
+        components: {'jaccard': float, 'seq': float, 'contig': float, 'time': float}
+        aux: {'best_run_len': int, 'best_run_start': int, 'cue_len': int, 'win_len': int}
+    """
+    cue_start, cue_end = cue_times
+    win_start, win_end = win_times
+    cue_tokens = _tokenize(cue_text or "")
+    win_tokens = _tokenize(win_text or "")
+    jacc = _jaccard_similarity(
+        {_normalize_core_for_compare(x) for x in cue_tokens},
+        {_normalize_core_for_compare(x) for x in win_tokens},
+    )
+    seq = _sequence_similarity(_normalize_text(cue_text or ""), _normalize_text(win_text or ""))
+    cue_cores = _normalize_tokens_cores(cue_text or "")
+    win_cores = _normalize_tokens_cores(win_text or "")
+    best_run_len, best_run_start = _max_contiguous_token_run(cue_cores, win_cores)
+    contig = best_run_len / max(1, min(len(cue_cores), len(win_cores)))
+    cue_dur = max(1e-6, cue_end - cue_start)
+    time_overlap = _overlap_s(win_start, win_end, cue_start, cue_end) / cue_dur
+
+    # Weighted composite
+    text_score = 0.5 * jacc + 0.3 * seq + 0.2 * contig
+    overall = 0.8 * text_score + 0.2 * time_overlap
+    return overall, {"jaccard": jacc, "seq": seq, "contig": contig, "time": time_overlap}, {
+        "best_run_len": best_run_len,
+        "best_run_start": best_run_start,
+        "cue_len": len(cue_cores),
+        "win_len": len(win_cores),
+    }
+
+
+def _advanced_find_best_window(
+    cue: Dict[str, Any],
+    segments: List[Dict[str, Any]],
+    initial_window_s: float = 8.0,
+) -> Dict[str, Any]:
+    """
+    Advanced candidate search for aligning a subtitle cue to transcript segments.
+
+    Strategy:
+    - Build candidate windows near the cue time (initial_window_s), try span lengths up to 3.
+    - Score using Jaccard, SequenceMatcher, and contiguous token run; include time overlap.
+    - If best score low, dynamically expand search window and span length.
+    - If still poor but time proximity good, perform fuzzy phrase sliding-window search.
+    - Favor windows that provide contiguous phrase matches to enable time refinement within spans.
+
+    Returns:
+        {
+          'span': (i, j),             # transcript segment indices [i, j)
+          'token_pos': (s_idx, e_idx) # contiguous phrase indices within concatenated span tokens (cores), if found
+          'score': float,             # overall score
+          'method': str,              # 'basic' | 'expanded' | 'fuzzy' | 'time-fallback'
+        }
+    """
+    if not segments:
+        return {"span": (-1, -1), "score": 0.0, "method": "empty"}
+
+    cue_text = cue.get("text", "") or ""
+    cue_start = float(cue["start_s"])
+    cue_end = float(cue["end_s"])
+    cue_center = (cue_start + cue_end) / 2.0
+
+    # Build candidate indices within time window
+    def candidate_indices(window_s: float) -> List[int]:
+        cand = []
+        for idx, seg in enumerate(segments):
+            center = (seg["start_s"] + seg["end_s"]) / 2.0
+            if abs(center - cue_center) <= window_s:
+                cand.append(idx)
+        return cand or list(range(len(segments)))
+
+    best = {"span": (-1, -1), "token_pos": None, "score": -1.0, "method": "basic"}
+    # Track nearest by time for fallback
+    nearest_idx = None
     min_time_dist = float("inf")
     for i, seg in enumerate(segments):
-        seg_center = (seg["start_s"] + seg["end_s"]) / 2.0
-        d = abs(seg_center - cue_center)
+        center = (seg["start_s"] + seg["end_s"]) / 2.0
+        d = abs(center - cue_center)
         if d < min_time_dist:
             min_time_dist = d
-            best_time_idx = i
+            nearest_idx = i
 
-    # Evaluate small windows around candidates: single seg and neighboring joins
-    for idx in candidates:
-        for span_len in (1, 2, 3):
-            i = idx
-            j = min(len(segments), i + span_len)
-            if i >= j:
-                continue
-            # Build concatenated text and time range
-            text = " ".join(segments[k]["text"] for k in range(i, j)).strip()
-            tokens = _tokenize(text)
-            sim = _jaccard_similarity(cue_tokens, tokens)
-            # Consider also temporal overlap with cue window
-            seg_start = segments[i]["start_s"]
-            seg_end = segments[j - 1]["end_s"]
-            time_overlap = _overlap_s(seg_start, seg_end, cue["start_s"], cue["end_s"])
-            cue_dur = max(1e-6, (cue["end_s"] - cue["start_s"]))
-            # Weighted scoring: prioritize token sim, then time overlap
-            score = sim * 0.8 + (time_overlap / cue_dur) * 0.2
-            if score > best_score:
-                best_score = score
-                best_span = (i, j)
+    def eval_candidates(cands: List[int], max_span_len: int, tag: str):
+        nonlocal best
+        for idx in cands:
+            for span_len in range(1, max_span_len + 1):
+                i = idx
+                j = min(len(segments), i + span_len)
+                if i >= j:
+                    continue
+                win_text = " ".join(segments[k]["text"] for k in range(i, j)).strip()
+                win_start = segments[i]["start_s"]
+                win_end = segments[j - 1]["end_s"]
+                score, comps, aux = _score_window(
+                    cue_text, win_text, (cue_start, cue_end), (win_start, win_end)
+                )
+                if score > best["score"]:
+                    token_pos = None
+                    if aux["best_run_len"] > 0 and aux["best_run_start"] >= 0:
+                        # Map phrase run into the concatenated window token space
+                        token_pos = (aux["best_run_start"], aux["best_run_start"] + aux["best_run_len"])
+                    best = {"span": (i, j), "token_pos": token_pos, "score": score, "method": tag}
 
-    # If we still don't have a text-similarity winner, fall back to nearest-by-time
-    if best_span == (-1, -1) and best_time_idx is not None:
-        return (best_time_idx, min(len(segments), best_time_idx + 1))
+    # Pass 1: local window, short spans (merge up to 3)
+    eval_candidates(candidate_indices(initial_window_s), max_span_len=3, tag="basic")
 
-    # If tokens are empty, just align by time nearest single segment
-    if not cue_tokens and best_span == (-1, -1) and segments:
-        # pick segment with closest center
-        min_d = 1e18
-        best_idx = 0
-        for i, seg in enumerate(segments):
-            d = abs(((seg["start_s"] + seg["end_s"]) / 2.0) - cue_center)
-            if d < min_d:
-                min_d = d
-                best_idx = i
-        return (best_idx, best_idx + 1)
+    # If weak, expand dynamically
+    if best["score"] < 0.35:
+        for win_s, span_len in [(12.0, 4), (18.0, 5), (30.0, 6)]:
+            eval_candidates(candidate_indices(win_s), max_span_len=span_len, tag="expanded")
+            if best["score"] >= 0.35:
+                break
 
-    return best_span
+    # Fuzzy phrase sliding-window if still weak but temporally close
+    # Consider "time proximity good" if nearest segment is within 2.0s of cue center
+    time_close = min_time_dist <= 2.0
+    if best["score"] < 0.25 and time_close:
+        # Build an extended region of segments around nearest_idx
+        left = max(0, (nearest_idx or 0) - 5)
+        right = min(len(segments), (nearest_idx or 0) + 6)
+        ext_i, ext_j = left, right
+        ext_texts = [segments[k]["text"] for k in range(ext_i, ext_j)]
+        # Build cores and segment mapping for sliding-window search
+        token_map: List[Tuple[int, int]] = []  # (seg_idx, token_index_in_seg)
+        ext_cores: List[str] = []
+        for k in range(ext_i, ext_j):
+            seg_tokens = _normalize_tokens_cores(segments[k]["text"])
+            for t_idx, core in enumerate(seg_tokens):
+                ext_cores.append(core)
+                token_map.append((k, t_idx))
+        cue_cores = _normalize_tokens_cores(cue_text)
+        if ext_cores and cue_cores:
+            best_ratio = 0.0
+            best_pos = (0, 0)
+            # Window length around cue length +/- 2 tokens
+            Lmin = max(1, len(cue_cores) - 2)
+            Lmax = min(len(ext_cores), len(cue_cores) + 2)
+            for L in range(Lmin, max(Lmin, Lmax) + 1):
+                for start in range(0, len(ext_cores) - L + 1):
+                    win = " ".join(ext_cores[start : start + L])
+                    cue_norm = " ".join(cue_cores)
+                    ratio = _sequence_similarity(cue_norm, win)
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                        best_pos = (start, start + L)
+            if best_ratio >= 0.4:
+                # Map back to span
+                t_s, t_e = best_pos
+                seg_i = token_map[t_s][0] if t_s < len(token_map) else ext_i
+                seg_j = token_map[t_e - 1][0] if t_e - 1 < len(token_map) else (ext_j - 1)
+                span = (seg_i, min(len(segments), seg_j + 1))
+                # Normalize token indices into the concatenated span token space later
+                best = {"span": span, "token_pos": None, "score": best_ratio, "method": "fuzzy"}
+                # We will compute precise token_pos at refinement time
+    # Fall back to nearest-by-time if we still have no valid span
+    if best["span"] == (-1, -1) and nearest_idx is not None:
+        best = {"span": (nearest_idx, min(len(segments), nearest_idx + 1)), "token_pos": None, "score": 0.0, "method": "time-fallback"}
+    return best
+
+
+def _refine_times_within_span_by_token_pos(
+    span: Tuple[int, int],
+    token_pos: Optional[Tuple[int, int]],
+    segments: List[Dict[str, Any]],
+) -> Tuple[float, float]:
+    """
+    Refine [start_s, end_s] inside a span using token position of a matched contiguous phrase.
+
+    Assumption:
+    - Word-level timestamps are not available; approximate by distributing segment duration uniformly over tokens.
+    - token_pos refers to indices within the concatenated normalized token cores across the span.
+    """
+    i, j = span
+    if token_pos is None or i < 0 or j <= i:
+        # No refinement possible
+        return float(segments[i]["start_s"]), float(segments[j - 1]["end_s"])
+    start_idx, end_idx = token_pos
+    # Build concatenated token cores and mapping to (seg_idx, token_index_in_seg)
+    concat_map: List[Tuple[int, int, float, float, int]] = []  # (seg_idx, tok_idx_in_seg, seg_start, seg_end, seg_token_count)
+    for k in range(i, j):
+        seg_text = segments[k]["text"]
+        cores = _normalize_tokens_cores(seg_text)
+        seg_start = float(segments[k]["start_s"])
+        seg_end = float(segments[k]["end_s"])
+        count = max(1, len(cores))
+        for ti, _ in enumerate(cores):
+            concat_map.append((k, ti, seg_start, seg_end, count))
+    if not concat_map:
+        return float(segments[i]["start_s"]), float(segments[j - 1]["end_s"])
+    # Clip indices to map bounds
+    s_idx = max(0, min(len(concat_map) - 1, start_idx))
+    e_idx = max(0, min(len(concat_map), end_idx))  # end is exclusive
+    e_idx = max(s_idx + 1, e_idx)
+
+    # Map start token to time inside its segment
+    seg_i, tok_i, seg_s, seg_e, seg_cnt = concat_map[s_idx]
+    seg_dur = max(1e-6, seg_e - seg_s)
+    start_time = seg_s + (tok_i / max(1, seg_cnt)) * seg_dur
+
+    # Map end token (exclusive index) to time; if end token points to start of next token,
+    # use the end boundary of that token's segment fraction
+    end_index_for_time = min(len(concat_map) - 1, e_idx - 1)
+    seg_j_idx, tok_j_idx, seg_js, seg_je, seg_jcnt = concat_map[end_index_for_time]
+    seg_jdur = max(1e-6, seg_je - seg_js)
+    end_time = seg_js + ((tok_j_idx + 1) / max(1, seg_jcnt)) * seg_jdur
+
+    # Ensure within overall span bounds
+    span_s = float(segments[i]["start_s"])
+    span_e = float(segments[j - 1]["end_s"])
+    start_time = min(max(start_time, span_s), span_e)
+    end_time = min(max(end_time, start_time + 1e-3), span_e)
+    return start_time, end_time
+
+
+def _find_best_segment_window_for_cue(cue: Dict[str, Any], segments: List[Dict[str, Any]], window_s: float = 8.0) -> Tuple[int, int]:
+    """
+    Wrapper retained for backward compatibility.
+    Delegates to _advanced_find_best_window and returns only the span.
+    """
+    match = _advanced_find_best_window(cue, segments, initial_window_s=window_s)
+    return match.get("span", (-1, -1))
 
 
 def _get_span_times(span: Tuple[int, int], segments: List[Dict[str, Any]], strategy: str = "transcript", audio_waveform: Optional[Any] = None) -> Tuple[float, float]:
@@ -996,7 +1203,10 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
     aligned_cues: List[Dict[str, Any]] = []
 
     for idx, cue in enumerate(cues_in, start=1):
-        span = _find_best_segment_window_for_cue(cue, segments)
+        match = _advanced_find_best_window(cue, segments, initial_window_s=8.0)
+        span = match.get("span", (-1, -1))
+        token_pos = match.get("token_pos")
+        method = match.get("method", "basic")
         if span == (-1, -1):
             # No matching window by similarity; snap to nearest transcript segment by time
             # This ensures start times correspond to real speech window.
@@ -1010,6 +1220,7 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
                     nearest_idx = i
             if nearest_idx is not None:
                 span = (nearest_idx, nearest_idx + 1)
+                method = "time-fallback"
                 print(f"[Align] Cue#{idx}: No text match; snapped to nearest transcript segment {nearest_idx}.")
             else:
                 print(f"[Align] Cue#{idx}: No transcript available; keeping original timing and text.")
@@ -1025,8 +1236,13 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             continue
 
         # Snap cue to the aligned span using the current timing strategy (transcript-based for now).
-        # For future audio alignment, switch strategy to 'audio' and provide an audio waveform.
-        new_start, new_end = _get_span_times(span, segments)
+        # If a contiguous phrase was detected, refine boundaries within the span proportionally.
+        if token_pos:
+            new_start, new_end = _refine_times_within_span_by_token_pos(span, token_pos, segments)
+        else:
+            new_start, new_end = _get_span_times(span, segments)
+        if method in ("expanded", "fuzzy"):
+            print(f"[Align] Cue#{idx} matched by {method} search; applying timing {'refinement' if token_pos else 'snap to span'}.")
 
         # Track and log timestamp changes from original cue to aligned window prior to OTT
         if abs(new_start - cue["start_s"]) > 1e-9 or abs(new_end - cue["end_s"]) > 1e-9:
