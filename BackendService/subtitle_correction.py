@@ -489,7 +489,19 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
             transcript_cores.append(tcore)
 
     if not base_cue_text:
-        return {"start_s": start_s, "end_s": end_s, "text": transcript_text, "_meta": {"overlap": 1.0, "conservative_mode": False, "replacements": [], "kept_tokens": []}}
+        return {
+            "start_s": start_s,
+            "end_s": end_s,
+            "text": transcript_text,
+            "span": (i, j),
+            "_lock_to_span": True,
+            "_meta": {
+                "overlap": 1.0,
+                "conservative_mode": False,
+                "replacements": [],
+                "kept_tokens": [],
+            },
+        }
 
     sub_tokens_raw = base_cue_text.split() if base_cue_text else []
     sub_cores_for_overlap = []
@@ -583,6 +595,8 @@ def _build_corrected_cue_from_segments(span: Tuple[int, int], segments: List[Dic
         "start_s": start_s,
         "end_s": end_s,
         "text": corrected_text,
+        "span": (i, j),
+        "_lock_to_span": True,
         "_meta": {
             "overlap": overlap,
             "conservative_mode": conservative_mode,
@@ -638,6 +652,7 @@ def _enforce_ott_constraints(
     min_duration_s: float = 0.8,
     max_duration_s: float = 8.0,
     global_max_end_s: Optional[float] = None,
+    respect_locked_spans: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Enforce basic OTT constraints:
@@ -662,6 +677,40 @@ def _enforce_ott_constraints(
     for i, cue in enumerate(cues_sorted):
         orig_start = float(cue["start_s"])
         orig_end = float(cue["end_s"])
+
+        # If respecting locked spans and this cue is locked to transcript, do not alter times
+        is_locked = bool(cue.get("_lock_to_span") or cue.get("span"))
+        if respect_locked_spans and is_locked:
+            start = orig_start
+            end = orig_end
+            change_reasons = ["locked-to-transcript-span"]
+            # Optional clamp to global media end if provided (should rarely apply)
+            if global_max_end_s is not None and math.isfinite(float(global_max_end_s)):
+                media_end = float(global_max_end_s)
+                if start >= media_end:
+                    print(f"[OTT] Cue#{i+1} dropped (locked) at/after media end {media_end:.3f}s")
+                    prev_end = media_end
+                    continue
+                if end > media_end:
+                    end = media_end
+                    change_reasons.append(f"clamp-to-media-end {media_end:.3f}s")
+                    if end <= start:
+                        print(f"[OTT] Cue#{i+1} dropped (locked) non-positive duration after clamp.")
+                        prev_end = end
+                        continue
+            # Log only if any change due to clamp (or for traceability)
+            if abs(orig_start - start) > 1e-9 or abs(orig_end - end) > 1e-9:
+                print(
+                    f"[OTT] Cue#{i+1} time adjusted (locked): "
+                    f"{_s_to_srt_time(orig_start)} --> {_s_to_srt_time(orig_end)}  "
+                    f"to  {_s_to_srt_time(start)} --> {_s_to_srt_time(end)}  "
+                    f"reason={'|'.join(change_reasons)}"
+                )
+            fixed.append({"start_s": start, "end_s": end, "text": cue.get("text", ""), "span": cue.get("span"), "_lock_to_span": True})
+            prev_end = end
+            continue
+
+        # Default behavior when not respecting locked spans
         start = max(prev_end, max(0.0, orig_start))
         end = max(start + 1e-3, orig_end)
         change_reasons = []
@@ -927,16 +976,11 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
             aligned_cues.append({"start_s": cue["start_s"], "end_s": cue["end_s"], "text": cue.get("text", "")})
             continue
 
-        # Always clamp cue to the transcript span window first (snap/clamp)
+        # Snap cue exactly to the transcript span window (exact start and end)
         seg_start = segments[span[0]]["start_s"]
         seg_end = segments[span[1] - 1]["end_s"]
-        # Hard clamp to transcript span to make transcript the ground truth
-        new_start = max(seg_start, min(corrected["start_s"], seg_end))
-        new_end = min(seg_end, max(corrected["end_s"], seg_start))
-        # Ensure valid ordering; if inverted or too tight, set exactly to span
-        if new_end <= new_start or (new_end - new_start) < 1e-3:
-            new_start = seg_start
-            new_end = seg_end
+        new_start = seg_start
+        new_end = seg_end
 
         # Track and log timestamp changes from original cue to aligned window prior to OTT
         if abs(new_start - cue["start_s"]) > 1e-9 or abs(new_end - cue["end_s"]) > 1e-9:
@@ -987,7 +1031,7 @@ def correct_subtitles(transcript: dict, subtitles: list) -> list:
 
     # Clamp final cues to the transcript's maximum end time to avoid exceeding media end
     media_end = max((seg["end_s"] for seg in segments), default=0.0)
-    constrained = _enforce_ott_constraints(merged, global_max_end_s=media_end)
+    constrained = _enforce_ott_constraints(merged, global_max_end_s=media_end, respect_locked_spans=True)
 
     # After OTT, report any further time changes by comparing merged vs constrained
     for i, cue in enumerate(constrained):
@@ -1183,6 +1227,31 @@ def hybrid_correct_subtitles(
     segments = _flatten_transcript_segments(transcript)
     audio_wave = _load_audio_waveform(audio_file) if audio_file else None
 
+    def _find_span_indices_by_times(seg_list: List[Dict[str, Any]], s: float, e: float) -> Tuple[int, int]:
+        """Find transcript segment index span [i, j) whose combined window exactly matches start/end (within tolerance)."""
+        if not seg_list:
+            return (-1, -1)
+        tol = 1e-6
+        # Find first segment whose start_s equals s
+        i_candidate = None
+        for idx, seg in enumerate(seg_list):
+            if abs(float(seg["start_s"]) - float(s)) <= tol:
+                i_candidate = idx
+                break
+        if i_candidate is None:
+            return (-1, -1)
+        # Find last segment in a consecutive run whose end_s equals e
+        accum_end = None
+        j_candidate = None
+        for j in range(i_candidate, len(seg_list)):
+            accum_end = seg_list[j]["end_s"]
+            if abs(float(accum_end) - float(e)) <= tol:
+                j_candidate = j + 1  # exclusive
+                break
+        if j_candidate is None:
+            return (-1, -1)
+        return (i_candidate, j_candidate)
+
     def transcript_text_for_range(start_s: float, end_s: float) -> str:
         parts: List[str] = []
         for seg in segments:
@@ -1232,9 +1301,20 @@ def hybrid_correct_subtitles(
     final_list: List[Dict[str, Any]] = []
     if enforce_ott_post:
         # Convert to internal shape for enforcement
-        internal = [{"start_s": c["start"], "end_s": c["end"], "text": c.get("text", "")} for c in stage2]
+        internal = []
+        for c in stage2:
+            s = float(c.get("start", 0.0))
+            e = float(c.get("end", s))
+            span = _find_span_indices_by_times(segments, s, e)
+            internal.append({
+                "start_s": s,
+                "end_s": e,
+                "text": c.get("text", ""),
+                "span": span if span != (-1, -1) else None,
+                "_lock_to_span": span != (-1, -1),
+            })
         media_end = max((seg["end_s"] for seg in segments), default=0.0)
-        final_cues = _enforce_ott_constraints(internal, global_max_end_s=media_end)
+        final_cues = _enforce_ott_constraints(internal, global_max_end_s=media_end, respect_locked_spans=True)
         # Reindex and map to required output schema
         for idx, c in enumerate(final_cues, start=1):
             final_list.append({
